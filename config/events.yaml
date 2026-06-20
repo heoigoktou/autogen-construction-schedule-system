@@ -1,0 +1,57 @@
+events:
+  source.documents.parsed:
+    priority: medium
+    subscribers:
+      - coordinator_agent
+      - data_parser_agent
+      - wbs_planner_agent
+      - resource_allocator_agent
+  parameter.check.requested:
+    priority: medium
+    subscribers:
+      - data_parser_agent
+      - coordinator_agent
+  parameter.missing.detected:
+    priority: high
+    subscribers:
+      - data_parser_agent
+      - wbs_planner_agent
+      - constraint_checker_agent
+  wbs.generated:
+    priority: medium
+    subscribers:
+      - resource_allocator_agent
+      - constraint_checker_agent
+      - coordinator_agent
+  resource.conflict.detected:
+    priority: high
+    subscribers:
+      - resource_allocator_agent
+      - constraint_checker_agent
+      - plan_arbiter_agent
+  constraint.violation.detected:
+    priority: high
+    subscribers:
+      - coordinator_agent
+  dynamic.event.received:
+    priority: high
+    subscribers:
+      - dynamic_responder_agent
+      - resource_allocator_agent
+      - constraint_checker_agent
+  adjustment.plan.proposed:
+    priority: high
+    subscribers:
+      - plan_arbiter_agent
+      - constraint_checker_agent
+      - coordinator_agent
+  arbitration.completed:
+    priority: high
+    subscribers:
+      - coordinator_agent
+      - data_parser_agent
+      - wbs_planner_agent
+      - resource_allocator_agent
+      - constraint_checker_agent
+      - dynamic_responder_agent
+      - plan_arbiter_agent

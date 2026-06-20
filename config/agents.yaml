@@ -1,0 +1,36 @@
+agents:
+  coordinator_agent:
+    display_name: 总控调度Agent
+    enabled: true
+    role: 任务拆解、Agent调度、通信协调、冲突汇总和最终发布
+    prompt_path: null
+  data_parser_agent:
+    display_name: 资料解析Agent
+    enabled: true
+    role: 读取参数清单、识别缺失参数、输出项目参数候选
+    prompt_path: null
+  wbs_planner_agent:
+    display_name: 工序规划Agent
+    enabled: true
+    role: 生成样例WBS、工序逻辑和流水规则
+    prompt_path: null
+  resource_allocator_agent:
+    display_name: 资源配置Agent
+    enabled: true
+    role: 生成样例资源需求并识别资源冲突
+    prompt_path: null
+  constraint_checker_agent:
+    display_name: 约束校核Agent
+    enabled: true
+    role: 校核工期、工艺、资源、现场约束
+    prompt_path: null
+  dynamic_responder_agent:
+    display_name: 动态响应Agent
+    enabled: true
+    role: 接收动态事件、判断触发等级、发起协商
+    prompt_path: null
+  plan_arbiter_agent:
+    display_name: 方案仲裁Agent
+    enabled: true
+    role: 对候选调整方案进行评分、排序和推荐
+    prompt_path: null

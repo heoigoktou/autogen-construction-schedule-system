@@ -1,0 +1,12 @@
+paths:
+  blackboard: data/blackboard/demo_blackboard.xlsx
+  parameter_template: data/templates/parameter_checklist_template.xlsx
+  source_docs_dir: data/input_docs
+  outputs_dir: outputs/demo
+  communication_log: outputs/demo/communication_log.xlsx
+  runtime_log: outputs/demo/runtime.log
+  demo_transcripts_dir: outputs/demo/demo_transcripts
+  docs_dir: docs/workflow
+  schedule_dir: outputs/demo/schedule
+  testing_dir: outputs/demo/testing
+  report_assets_dir: outputs/demo/report_assets

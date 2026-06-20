@@ -1,0 +1,49 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and packaging
+.venv/
+.venv.bak-*/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# Python caches and test caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Runtime artifacts
+outputs/**
+!outputs/
+!outputs/.gitkeep
+*.log
+
+# Local data and generated workbooks
+data/blackboard/**
+!data/blackboard/
+!data/blackboard/.gitkeep
+data/input_docs/**
+!data/input_docs/
+!data/input_docs/.gitkeep
+data/archive/
+data/.tmp/
+data/cases/*/blackboard/
+data/cases/*/.tmp/
+data/cases/*/archive/
+
+# Office and OS temporary files
+~$*
+*.tmp
+.DS_Store
+Thumbs.db
+desktop.ini

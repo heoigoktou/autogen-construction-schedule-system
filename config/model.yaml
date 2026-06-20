@@ -1,0 +1,10 @@
+model:
+  provider: openai_compatible
+  name: kimi-k2.6
+  api_style: chat_completions
+  base_url: https://api.moonshot.cn/v1
+  temperature:
+  timeout_seconds: 600
+  max_retries: 4
+  disable_thinking: true
+  mock_mode: false
