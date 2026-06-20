@@ -5,9 +5,6 @@ AgentChat. The project coordinates document parsing, parameter extraction, WBS
 generation, resource allocation, constraint checking, dynamic event response,
 and plan arbitration. Excel workbooks are used as the formal shared blackboard.
 
-This repository is prepared for public release: real source documents, run
-outputs, logs, blackboard workbooks, archives, and local credentials are ignored
-by default.
 
 ## Capabilities
 
