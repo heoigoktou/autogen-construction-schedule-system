@@ -25,6 +25,12 @@ def validate_live_model_settings(settings: dict[str, Any]) -> None:
         raise ModelConfigurationError(
             "未配置 MOONSHOT_API_KEY 或 OPENAI_API_KEY，无法启动 AutoGen AgentChat。"
         )
+    model = str(settings.get("model") or "")
+    base_url = str(settings.get("base_url") or "")
+    if _is_kimi_model(model) and "moonshot." not in base_url:
+        raise ModelConfigurationError(
+            "Kimi 模型必须使用 Moonshot/Kimi API base_url，例如 https://api.moonshot.cn/v1。"
+        )
 
 
 def build_openai_chat_completion_client(
@@ -77,6 +83,8 @@ def build_openai_chat_completion_client(
             "family": ModelFamily.UNKNOWN,
         },
     }
+    if settings.get("max_tokens"):
+        kwargs["max_tokens"] = int(settings["max_tokens"])
     if settings.get("temperature") is not None and not _is_kimi_model(model):
         kwargs["temperature"] = float(settings["temperature"])
     if _is_kimi_model(model):

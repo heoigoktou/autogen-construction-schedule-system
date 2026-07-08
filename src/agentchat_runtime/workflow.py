@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
 from agentchat_runtime.exceptions import AgentChatRuntimeError, AgentOutputValidationError
+from agentchat_runtime.fallback import build_runtime_fallback_payload
 from agentchat_runtime.model_factory import build_openai_chat_completion_client
 from agentchat_runtime.output_writer import (
     force_write_agentchat_output,
@@ -195,6 +197,7 @@ class AgentChatWorkflow:
                     timeout=_team_run_timeout_seconds(self.model_settings),
                 )
             except Exception as exc:
+                self._raise_if_cancelled()
                 problem = _runtime_failure_message(exc, attempt=attempt)
                 self._persist_attempt_artifacts(
                     attempt=attempt,
@@ -204,6 +207,30 @@ class AgentChatWorkflow:
                     failure=True,
                 )
                 self._write_error_report(problem=problem, fix_action=_runtime_fix_action(exc))
+                if _runtime_fallback_enabled(self.model_settings):
+                    fallback_payload = build_runtime_fallback_payload(
+                        documents=self.documents,
+                        draft_tables=self.draft_tables,
+                        problem=problem,
+                    )
+                    forced_final_content = _build_forced_final_content(fallback_payload)
+                    counts = force_write_agentchat_output(
+                        self.store,
+                        fallback_payload,
+                        source_documents=self.documents,
+                        validation_error=problem,
+                    )
+                    LOGGER.warning(
+                        "AgentChat runtime fallback force-written after attempt %s: %s",
+                        attempt,
+                        counts,
+                    )
+                    return AgentChatWorkflowResult(
+                        final_content=forced_final_content,
+                        written_counts=counts,
+                        message_count=total_messages,
+                        stop_reason="runtime_fallback",
+                    )
                 raise AgentChatRuntimeError(problem) from exc
             finally:
                 for model_client in model_clients:
@@ -360,10 +387,15 @@ class AgentChatWorkflow:
 
         task_result: Any = None
         validation_error_counts: dict[str, int] = {}
+        tool_call_counts: dict[str, int] = {}
         cancellation_token = CancellationToken()
         cancel_task = asyncio.create_task(self._watch_cancel(cancellation_token))
         try:
-            async for event in team.run_stream(task=task, cancellation_token=cancellation_token):
+            async for event in _iterate_team_stream(
+                team,
+                task=task,
+                cancellation_token=cancellation_token,
+            ):
                 self._raise_if_cancelled()
                 if hasattr(event, "messages") and hasattr(event, "stop_reason"):
                     task_result = event
@@ -371,6 +403,11 @@ class AgentChatWorkflow:
                 source = str(getattr(event, "source", event.__class__.__name__))
                 raw_content = _message_content(event)
                 final_payload = _extract_final_payload_from_text(raw_content)
+                repeated_tool_call = _track_repeated_tool_call(
+                    raw_content,
+                    tool_call_counts,
+                    _repeated_tool_call_limit(self.model_settings),
+                )
                 repeated_error = _track_repeated_validation_error(
                     raw_content,
                     validation_error_counts,
@@ -387,6 +424,11 @@ class AgentChatWorkflow:
                             SimpleNamespace(source="coordinator_agent", content=final_payload)
                         ],
                         stop_reason="final_payload_tool_result",
+                    )
+                if repeated_tool_call:
+                    raise AgentChatRuntimeError(
+                        "Repeated AgentChat tool call without progress; stopping run: "
+                        f"{repeated_tool_call}"
                     )
                 if repeated_error:
                     raise AgentOutputValidationError(
@@ -656,6 +698,7 @@ def build_selector_team(
         stateful_candidate_func = _build_responsible_repair_candidate_func(draft_tables)
     else:
         stateful_candidate_func = _build_candidate_func(draft_tables)
+    model_client_stream = _model_client_stream_enabled(model_settings)
     agents = [
         AssistantAgent(
             "data_parser_agent",
@@ -663,6 +706,7 @@ def build_selector_team(
             tools=tools_by_agent["data_parser_agent"],
             description="从真实资料抽取项目参数并维护 parameter_checklist/project_parameters。",
             system_message=_agent_system_message("data_parser_agent"),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 4),
@@ -673,6 +717,7 @@ def build_selector_team(
             tools=tools_by_agent["wbs_planner_agent"],
             description="根据真实资料和参数生成非模板 WBS 工序。",
             system_message=_agent_system_message("wbs_planner_agent"),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 4),
@@ -683,6 +728,7 @@ def build_selector_team(
             tools=tools_by_agent["resource_allocator_agent"],
             description="根据 WBS 和资料推断资源需求、容量和冲突。",
             system_message=_agent_system_message("resource_allocator_agent"),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 3),
@@ -693,6 +739,7 @@ def build_selector_team(
             tools=tools_by_agent["constraint_checker_agent"],
             description="校验 schema、前置关系、CPM、资源字段和成果一致性。",
             system_message=_agent_system_message("constraint_checker_agent"),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 3),
@@ -703,6 +750,7 @@ def build_selector_team(
             tools=tools_by_agent["dynamic_responder_agent"],
             description="从资料中的事件或进度风险提取动态事件。",
             system_message=_agent_system_message("dynamic_responder_agent"),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 3),
@@ -713,6 +761,7 @@ def build_selector_team(
             tools=tools_by_agent["plan_arbiter_agent"],
             description="生成、评分并选择调整方案。",
             system_message=_agent_system_message("plan_arbiter_agent"),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 3),
@@ -723,6 +772,7 @@ def build_selector_team(
             tools=tools_by_agent["coordinator_agent"],
             description="总控协调，产出最终 JSON 并用 FINAL_SCHEDULE_READY 收尾。",
             system_message=_coordinator_system_message(),
+            model_client_stream=model_client_stream,
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
             max_tool_iterations=_tool_iteration_limit(model_settings, 4),
@@ -1515,6 +1565,17 @@ def _extract_final_payload_from_message(message: Any) -> str:
     return ""
 
 
+async def _iterate_team_stream(team: Any, *, task: str, cancellation_token: Any):
+    try:
+        stream = team.run_stream(task=task, cancellation_token=cancellation_token)
+    except TypeError as exc:
+        if "cancellation_token" not in str(exc):
+            raise
+        stream = team.run_stream(task=task)
+    async for event in stream:
+        yield event
+
+
 def _extract_final_payload_from_text(content: str) -> str:
     text = str(content or "").strip()
     marker = "FINAL_SCHEDULE_READY"
@@ -1618,6 +1679,14 @@ def _tool_iteration_limit(settings: dict[str, Any], default: int) -> int:
     return max(1, min(default, configured))
 
 
+def _model_client_stream_enabled(settings: dict[str, Any]) -> bool:
+    return settings.get("stream") is not False
+
+
+def _runtime_fallback_enabled(settings: dict[str, Any]) -> bool:
+    return settings.get("agentchat_fallback_on_runtime_error") is not False
+
+
 def _runtime_fix_action(exc: Exception) -> str:
     if _exception_indicates_rate_limit(exc):
         return (
@@ -1646,6 +1715,42 @@ def _repeated_validation_error_limit(settings: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         limit = DEFAULT_REPEATED_VALIDATION_ERROR_LIMIT
     return max(1, limit)
+
+
+def _repeated_tool_call_limit(settings: dict[str, Any]) -> int:
+    try:
+        limit = int(settings.get("repeated_tool_call_limit") or 4)
+    except (TypeError, ValueError):
+        limit = 4
+    return max(2, limit)
+
+
+def _track_repeated_tool_call(
+    content: str,
+    counts: dict[str, int],
+    limit: int,
+) -> str | None:
+    signature = _tool_call_signature(content)
+    if not signature:
+        return None
+    counts[signature] = counts.get(signature, 0) + 1
+    if counts[signature] >= limit:
+        return signature
+    return None
+
+
+def _tool_call_signature(content: str) -> str:
+    text = str(content or "")
+    match = re.search(
+        r"FunctionCall\(id='[^']+', arguments='(?P<args>.*?)', name='(?P<name>[^']+)'\)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        return ""
+    arguments = match.group("args")
+    arguments = arguments.replace('\\"', '"').replace("\\\\", "\\")
+    return f"{match.group('name')}:{arguments}"
 
 
 def _track_repeated_validation_error(
