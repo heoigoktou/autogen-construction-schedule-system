@@ -69,7 +69,7 @@ def build_model_settings(project_root: Path) -> dict[str, Any]:
     timeout_seconds = _int_env("OPENAI_TIMEOUT_SECONDS", yaml_model.get("timeout_seconds"), 60)
     max_retries = _int_env("OPENAI_MAX_RETRIES", yaml_model.get("max_retries"), 2)
     max_tokens = _optional_int_env("OPENAI_MAX_TOKENS", yaml_model.get("max_tokens"))
-    stream = _bool_env("OPENAI_STREAM", yaml_model.get("stream"), True)
+    stream = _bool_env("OPENAI_STREAM", yaml_model.get("stream"), False)
     mock_mode = _bool_env("MODEL_MOCK_MODE", yaml_model.get("mock_mode"), provider == "mock")
 
     return {
