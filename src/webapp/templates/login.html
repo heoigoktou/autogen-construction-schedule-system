@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260707-1735">
+</head>
+<body class="login-body figma-login">
+  <div class="login-shell">
+    <section class="login-hero">
+      <div class="login-hero-brand">
+        <span class="helmet-mark"><img src="/static/brand-icon.png" alt=""></span>
+        <strong>多智能体施工进度生成与调整系统</strong>
+      </div>
+      <div class="login-hero-copy">
+        <span>Project Schedule Intelligence</span>
+        <h1>施工进度计划智能管理平台</h1>
+        <p>统一上传资料、启动多智能体排程、查看日志与结果文件，支持 WBS、资源负荷与关键节点的闭环调整。</p>
+      </div>
+      <div class="login-hero-visual" aria-hidden="true">
+        <img src="/static/login-illustration.png" alt="">
+      </div>
+    </section>
+    <section class="login-form-wrap">
+      <form class="login-panel" method="post" action="/login">
+        <h2>系统登录</h2>
+        <p class="muted">使用项目账号进入进度管理工作台</p>
+        {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+        <label>账号
+          <input name="username" autocomplete="username" required>
+        </label>
+        <label>密码
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <div class="login-options">
+          <label><input type="checkbox"> 记住本机</label>
+          <button type="button" class="admin-contact-button" id="adminContactOpen">联系管理员</button>
+        </div>
+        <button type="submit" class="login-submit">登录工作台</button>
+        <p class="login-env">当前环境：云服务器 / 施工排程 Web / v2.8.1</p>
+      </form>
+    </section>
+  </div>
+  <div class="contact-modal" id="adminContactModal" hidden>
+    <div class="contact-dialog" role="dialog" aria-modal="true" aria-labelledby="adminContactTitle">
+      <h2 id="adminContactTitle">管理员邮箱</h2>
+      <p>2034069723@qq.com</p>
+      <button type="button" id="adminContactClose">关闭</button>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const modal = document.getElementById("adminContactModal");
+      const open = document.getElementById("adminContactOpen");
+      const close = document.getElementById("adminContactClose");
+      const hide = () => { modal.hidden = true; };
+      open.addEventListener("click", () => { modal.hidden = false; });
+      close.addEventListener("click", hide);
+      modal.addEventListener("click", event => {
+        if (event.target === modal) hide();
+      });
+      document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && !modal.hidden) hide();
+      });
+    })();
+  </script>
+</body>
+</html>

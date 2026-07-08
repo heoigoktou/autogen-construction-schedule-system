@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>上传资料</h1>
+    <div class="muted">上传项目资料后创建独立排程任务。</div>
+  </div>
+  <a class="button secondary" href="/jobs">返回列表</a>
+</div>
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
+<div class="upload-layout">
+  <form class="form-panel upload-panel" method="post" action="/jobs" enctype="multipart/form-data">
+    <label class="job-name-field">任务名称
+      <input name="job_name" type="text" maxlength="120" placeholder="可选；不填则使用上传文件名 + 上传时间">
+    </label>
+    <div class="upload-dropzone">
+      <div class="upload-icon">↑</div>
+      <h2>拖拽施工资料到此处或点击选择文件</h2>
+      <p>支持 PDF、DOCX、XLSX、CSV、TXT、MD，可一次选择多个文件。</p>
+      <label class="file-picker">选择文件
+        <input id="uploadFilesInput" name="files" type="file" multiple required accept=".txt,.md,.csv,.xlsx,.docx,.pdf">
+      </label>
+      <div id="selectedFiles" class="selected-files" aria-live="polite">尚未选择文件</div>
+    </div>
+    <div class="upload-template-grid">
+      <div><strong>WBS 工作分解表</strong><span>工序编码、名称、工期、紧前关系</span></div>
+      <div><strong>资源与班组配置</strong><span>人员、机械、材料、demand/capacity</span></div>
+      <div><strong>施工日历与约束</strong><span>工作日、夜班、封路窗口、审批节点</span></div>
+      <div><strong>扰动事件样例</strong><span>暴雨、供应延误、设计变更、停工风险</span></div>
+    </div>
+    <div class="form-actions">
+      <button type="submit">创建任务</button>
+      <a class="button secondary" href="/jobs">取消</a>
+    </div>
+  </form>
+  <aside class="panel-section upload-rules">
+    <div class="section-head">
+      <div>
+        <h2>资料校验规则</h2>
+        <p class="muted">上传后系统会生成独立任务目录。</p>
+      </div>
+    </div>
+    <ul>
+      <li>必填列：工序编码、名称、持续时间、紧前关系。</li>
+      <li>资源表建议包含 demand 和 capacity。</li>
+      <li>支持格式：{{ allowed_extensions }}。</li>
+      <li>默认单次上传上限 100MB。</li>
+    </ul>
+  </aside>
+</div>
+<script>
+(() => {
+  const input = document.getElementById("uploadFilesInput");
+  const list = document.getElementById("selectedFiles");
+  if (!input || !list) return;
+  input.addEventListener("change", () => {
+    const files = Array.from(input.files || []);
+    if (!files.length) {
+      list.textContent = "尚未选择文件";
+      return;
+    }
+    list.innerHTML = files.map(file => `<span>${file.name}</span>`).join("");
+  });
+})();
+</script>
+{% endblock %}

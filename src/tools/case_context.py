@@ -66,6 +66,29 @@ def resolve_case_context(
     )
 
 
+def resolve_web_case_context(project_root: Path, *, job_id: str) -> CaseContext:
+    """Resolve isolated paths for one Web job."""
+
+    if not job_id or any(char in job_id for char in "/\\:"):
+        raise ValueError(f"Invalid job_id: {job_id!r}")
+
+    job_root = project_root / "data" / "web" / "jobs" / job_id
+    outputs_root = job_root / "outputs"
+    return CaseContext(
+        case_id=job_id,
+        input_docs_dir=job_root / "uploads",
+        blackboard_path=job_root / "blackboard" / "blackboard.xlsx",
+        case_archive_dir=job_root / "archive",
+        tmp_dir=job_root / "tmp",
+        outputs_root=outputs_root,
+        schedule_dir=outputs_root / "schedule",
+        demo_transcripts_dir=outputs_root / "demo_transcripts",
+        report_assets_dir=outputs_root / "report_assets",
+        outputs_archive_dir=outputs_root / "archive",
+        runtime_log=job_root / "runtime.log",
+    )
+
+
 def ensure_case_directories(context: CaseContext) -> None:
     """Create the standard directories for the real workflow."""
 
