@@ -253,6 +253,7 @@ def _agentchat_mode_overrides(run_mode: str) -> dict[str, Any]:
             "agentchat_run_mode": "standard",
             "max_tokens": 3000,
             "team_run_timeout_seconds": 1200,
+            "agent_text_stall_limit": 4,
         }
     return {
         "agentchat_run_mode": "light",
@@ -266,6 +267,7 @@ def _agentchat_mode_overrides(run_mode: str) -> dict[str, Any]:
         "agentchat_tool_iterations": 2,
         "repeated_validation_error_limit": 1,
         "repeated_tool_call_limit": 3,
+        "agent_text_stall_limit": 3,
         "team_run_timeout_seconds": 420,
         "max_tokens": 1800,
         "agentchat_fallback_on_runtime_error": True,

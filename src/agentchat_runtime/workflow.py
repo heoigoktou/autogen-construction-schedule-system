@@ -388,6 +388,7 @@ class AgentChatWorkflow:
         task_result: Any = None
         validation_error_counts: dict[str, int] = {}
         tool_call_counts: dict[str, int] = {}
+        agent_text_stall_counts: dict[str, int] = {}
         cancellation_token = CancellationToken()
         cancel_task = asyncio.create_task(self._watch_cancel(cancellation_token))
         try:
@@ -407,6 +408,13 @@ class AgentChatWorkflow:
                     raw_content,
                     tool_call_counts,
                     _repeated_tool_call_limit(self.model_settings),
+                )
+                stalled_agent = _track_agent_text_stall(
+                    source,
+                    raw_content,
+                    self.draft_tables,
+                    agent_text_stall_counts,
+                    _agent_text_stall_limit(self.model_settings),
                 )
                 repeated_error = _track_repeated_validation_error(
                     raw_content,
@@ -429,6 +437,11 @@ class AgentChatWorkflow:
                     raise AgentChatRuntimeError(
                         "Repeated AgentChat tool call without progress; stopping run: "
                         f"{repeated_tool_call}"
+                    )
+                if stalled_agent:
+                    raise AgentChatRuntimeError(
+                        "AgentChat agent produced repeated explanatory text without writing "
+                        f"its required draft table; stopping run: {stalled_agent}"
                     )
                 if repeated_error:
                     raise AgentOutputValidationError(
@@ -1723,6 +1736,54 @@ def _repeated_tool_call_limit(settings: dict[str, Any]) -> int:
     except (TypeError, ValueError):
         limit = 4
     return max(2, limit)
+
+
+def _agent_text_stall_limit(settings: dict[str, Any]) -> int:
+    try:
+        limit = int(settings.get("agent_text_stall_limit") or 4)
+    except (TypeError, ValueError):
+        limit = 4
+    return max(2, limit)
+
+
+def _track_agent_text_stall(
+    source: str,
+    content: str,
+    draft_tables: dict[str, list[dict[str, Any]]],
+    counts: dict[str, int],
+    limit: int,
+) -> str | None:
+    missing_sheet = _missing_required_sheet_for_agent(source, draft_tables)
+    if not missing_sheet:
+        counts.pop(source, None)
+        return None
+    text = str(content or "").strip()
+    if not text or "FunctionCall(" in text or "write_blackboard_table result" in text:
+        counts[source] = 0
+        return None
+    if text in {"TextMessage", "ModelClientStreamingChunkEvent"}:
+        return None
+    counts[source] = counts.get(source, 0) + 1
+    if counts[source] >= limit:
+        return f"{source} did not write {missing_sheet} after {counts[source]} text messages"
+    return None
+
+
+def _missing_required_sheet_for_agent(
+    source: str,
+    draft_tables: dict[str, list[dict[str, Any]]],
+) -> str:
+    agent_required_sheets = {
+        "data_parser_agent": ("parameter_checklist", "project_parameters"),
+        "wbs_planner_agent": ("wbs_tasks_final",),
+        "resource_allocator_agent": ("resource_plan_final",),
+        "dynamic_responder_agent": ("event_log",),
+        "plan_arbiter_agent": ("adjustment_plan",),
+    }
+    for sheet_name in agent_required_sheets.get(source, ()):
+        if not draft_tables.get(sheet_name):
+            return sheet_name
+    return ""
 
 
 def _track_repeated_tool_call(
