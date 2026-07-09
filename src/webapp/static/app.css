@@ -88,6 +88,23 @@ a {
   margin: 0;
 }
 
+.page-head .actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 2px;
+}
+
+.page-head .actions .button,
+.page-head .actions button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap;
+  word-break: keep-all;
+  line-height: 1;
+}
+
 .page {
   max-width: 1320px;
   margin: 0 auto;
@@ -1567,10 +1584,13 @@ input[type="number"],
 
 @media (max-width: 720px) {
   .topbar,
-  .page-head,
-  .actions {
+  .page-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .page-head .actions {
+    width: 100%;
   }
 
   .topbar {
