@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from tools.case_context import resolve_web_case_context
 from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
 from webapp.editors import save_resource_rows, save_wbs_rows
-from webapp.jobs import copy_uploaded_files_to_job, save_uploads
+from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
 from webapp.services import artifact_path, list_existing_artifacts, recalculate_blackboard_outputs
 
 
@@ -113,3 +114,35 @@ def test_create_job_writes_metadata_and_blackboard(tmp_path: Path) -> None:
     assert job.metadata["status"] == "queued"
     assert job.context.blackboard_path.exists()
     assert job.context.runtime_log.parent.exists()
+
+
+def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from webapp import app as webapp_app
+
+    upload = SimpleNamespace(filename="case.md", file=BytesIO(b"# case"))
+    job = copy_uploaded_files_to_job(tmp_path, [upload], max_upload_bytes=100)
+    calls: list[str] = []
+
+    def fake_preprocess(input_docs_dir: Path, outputs_root: Path, blackboard_path: Path) -> SimpleNamespace:
+        calls.append("preprocess")
+        return SimpleNamespace(package={"summary": {"readiness_score": 95, "missing_required_count": 0}})
+
+    def fake_workflow(**kwargs: object) -> dict[str, Path]:
+        calls.append("workflow")
+        context = kwargs["context"]
+        return {"output_dir": context.outputs_root, "blackboard": context.blackboard_path}
+
+    monkeypatch.setattr(webapp_app, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(webapp_app, "preprocess_job_documents", fake_preprocess)
+    monkeypatch.setattr(webapp_app, "run_real_case_workflow", fake_workflow)
+    monkeypatch.setattr(webapp_app, "recalculate_blackboard_outputs", lambda *args, **kwargs: {})
+    monkeypatch.setattr(webapp_app, "list_existing_artifacts", lambda *args, **kwargs: [])
+
+    lock = threading.Lock()
+    lock.acquire()
+    webapp_app._run_job_worker(job.job_id, lock, threading.Event(), {})
+
+    reloaded = load_job(tmp_path, job.job_id)
+    assert calls[:2] == ["preprocess", "workflow"]
+    assert reloaded.metadata["preprocess_summary"]["readiness_score"] == 95
+    assert reloaded.metadata["status"] == "succeeded"

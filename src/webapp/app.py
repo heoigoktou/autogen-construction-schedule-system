@@ -556,6 +556,19 @@ def _run_job_worker(
 ) -> None:
     try:
         job = load_job(PROJECT_ROOT, job_id)
+        preprocess_result = preprocess_job_documents(
+            job.context.input_docs_dir,
+            job.context.outputs_root,
+            job.context.blackboard_path,
+        )
+        update_job_metadata(
+            job.context,
+            preprocessed_at=now_iso(),
+            preprocess_summary=preprocess_result.package.get("summary") or {},
+        )
+        if cancel_event.is_set():
+            raise RuntimeError("Job cancelled by user.")
+        job = load_job(PROJECT_ROOT, job_id)
         result = run_real_case_workflow(
             context=job.context,
             project_root=PROJECT_ROOT,
