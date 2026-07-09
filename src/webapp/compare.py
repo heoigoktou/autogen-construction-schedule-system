@@ -485,6 +485,17 @@ def compare_gantt_to_png(compare: dict[str, Any]) -> bytes:
                 color=adjusted_color,
                 edgecolor="none",
             )
+        if int(row.get("finish_delta_days") or 0) > 0 and base_finish and adjusted_finish:
+            ax.barh(
+                y - 0.16,
+                max(1, (adjusted_finish - base_finish).days + 1),
+                left=mdates.date2num(base_finish),
+                height=0.16,
+                color="#EF4444",
+                edgecolor="none",
+                alpha=0.95,
+                zorder=2,
+            )
         if row.get("adjusted_critical"):
             marker_date = adjusted_start or base_start
             if marker_date:
@@ -517,6 +528,7 @@ def compare_gantt_to_png(compare: dict[str, Any]) -> bytes:
         handles=[
             plt.Line2D([0], [0], color=base_color, linewidth=6, label="Baseline"),
             plt.Line2D([0], [0], color=adjusted_color, linewidth=6, label="Adjusted"),
+            plt.Line2D([0], [0], color="#EF4444", linewidth=6, label="Delay"),
             plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=critical_color, label="Critical", markersize=6),
         ],
         loc="upper right",
