@@ -1410,19 +1410,21 @@ input[type="number"],
 .compare-gantt-wrap {
   padding: 18px;
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .compare-gantt {
-  min-width: 1060px;
+  width: calc(500px + var(--timeline-width, 1120px));
+  min-width: calc(500px + var(--timeline-width, 1120px));
   border: 1px solid #d7dee8;
   border-radius: 8px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .compare-gantt-head,
 .compare-gantt-row {
   display: grid;
-  grid-template-columns: 90px 190px 110px minmax(0, 1fr);
+  grid-template-columns: 110px 250px 140px var(--timeline-width, 1120px);
 }
 
 .compare-gantt-head {
@@ -1439,8 +1441,15 @@ input[type="number"],
 
 .compare-gantt-head > div {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
   text-align: center;
+}
+
+.gantt-timeline-head {
+  min-width: var(--timeline-width, 1120px);
+}
+
+.gantt-timeline-head span {
+  white-space: nowrap;
 }
 
 .compare-gantt-row {
@@ -1458,10 +1467,35 @@ input[type="number"],
   color: #b42318;
 }
 
+.compare-gantt .sticky-col {
+  position: sticky;
+  z-index: 2;
+  background: inherit;
+  box-shadow: 1px 0 0 #d7dee8;
+}
+
+.compare-gantt-head .sticky-col {
+  z-index: 3;
+  background: #eef2f6;
+}
+
+.compare-gantt .col-id {
+  left: 0;
+}
+
+.compare-gantt .col-name {
+  left: 110px;
+}
+
+.compare-gantt .col-phase {
+  left: 360px;
+}
+
 .gantt-track {
   position: relative;
   min-height: 62px;
   padding: 8px 12px;
+  min-width: var(--timeline-width, 1120px);
 }
 
 .gantt-track::before {

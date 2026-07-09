@@ -85,11 +85,12 @@
       <label><input id="changedOnly" type="checkbox"> 只看变化工序</label>
     </div>
   </div>
+  {% set timeline_width = compare.timeline.labels|length * 140 %}
   <div class="compare-gantt-wrap">
-    <div class="compare-gantt">
+    <div class="compare-gantt" style="--timeline-width: {{ timeline_width }}px;">
       <div class="compare-gantt-head">
-        <span>任务编号</span><span>任务名称</span><span>阶段</span>
-        <div>
+        <span class="sticky-col col-id">任务编号</span><span class="sticky-col col-name">任务名称</span><span class="sticky-col col-phase">阶段</span>
+        <div class="gantt-timeline-head" style="grid-template-columns: repeat({{ compare.timeline.labels|length }}, 140px);">
           {% for label in compare.timeline.labels %}
           <span>{{ label }}</span>
           {% endfor %}
@@ -100,9 +101,9 @@
            data-phase="{{ row.phase }}"
            data-critical="{{ '1' if row.adjusted_critical else '0' }}"
            data-changed="{{ '1' if row.changed else '0' }}">
-        <span class="mono-cell">{{ row.task_id }}</span>
-        <span>{% if row.adjusted_critical %}<b class="critical-dot">●</b>{% endif %}{{ row.task_name }}</span>
-        <span class="muted">{{ row.phase }}</span>
+        <span class="mono-cell sticky-col col-id">{{ row.task_id }}</span>
+        <span class="sticky-col col-name">{% if row.adjusted_critical %}<b class="critical-dot">●</b>{% endif %}{{ row.task_name }}</span>
+        <span class="muted sticky-col col-phase">{{ row.phase }}</span>
         <div class="gantt-track">
           {% if row.base_width %}
           <i class="base-bar" style="left: {{ row.base_left }}%; width: {{ row.base_width }}%;"></i>
