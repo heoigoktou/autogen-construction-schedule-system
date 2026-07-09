@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head compare-head">
+  <div>
+    <a class="back-link" href="/jobs/{{ job.job_id }}">← 返回任务详情</a>
+    <h1>动态进度对比</h1>
+    <div class="muted">任务 {{ job.metadata.name or job.job_id }} · 对比基准方案与扰动调整方案的工期、关键线路、资源冲突和里程碑偏差。</div>
+  </div>
+  <div class="actions">
+    <button type="button" class="secondary">导出对比报告</button>
+    <button type="button" class="secondary">导出当前视图图片</button>
+  </div>
+</div>
+
+<section class="panel-section compare-panel">
+  <div class="section-head">
+    <div>
+      <h2>方案选择</h2>
+      <p class="muted">当前为界面展示内容，后续可接入真实基准方案与调整方案数据。</p>
+    </div>
+  </div>
+  <div class="compare-selector-grid">
+    <div class="compare-plan-card baseline">
+      <label>基准方案</label>
+      <select disabled>
+        <option>Baseline-V3.1｜基准进度</option>
+      </select>
+      <div class="compare-tags">
+        <span>基准进度</span>
+        <span>生成 2026-07-07 09:12:00</span>
+        <span>总工期 548 天</span>
+        <span>完工 2028-01-30</span>
+      </div>
+    </div>
+    <div class="compare-vs">VS</div>
+    <div class="compare-plan-card adjusted">
+      <label>调整方案</label>
+      <select disabled>
+        <option>Adjusted-Rain-Steel-04｜钢构件供应延误 + 连续降雨影响</option>
+      </select>
+      <div class="compare-tags">
+        <span class="tag-red">钢构件供应延误</span>
+        <span class="tag-orange">连续降雨影响</span>
+        <span>总工期 562 天</span>
+        <span>完工 2028-02-13</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="compare-metrics">
+  <div><span>总工期偏差</span><strong class="bad-text">+14 天</strong><small>延误</small></div>
+  <div><span>完工日期变化</span><strong class="bad-text">01-30 → 02-13</strong><small>后移</small></div>
+  <div><span>关键线路变化</span><strong class="bad-text">新增 8 个关键工序</strong><small>变化</small></div>
+  <div><span>延误工序数量</span><strong class="bad-text">23 个</strong><small>需处理</small></div>
+  <div><span>资源冲突变化</span><strong class="warn-text">5 项冲突</strong><small>+2</small></div>
+</section>
+
+<section class="panel-section compare-panel">
+  <div class="section-head">
+    <div>
+      <h2>主体甘特图对比</h2>
+      <p class="muted">蓝色浅条为基准计划，深蓝条为调整后计划，红色条为延误范围。</p>
+    </div>
+    <div class="compare-filter-row">
+      <select disabled><option>全部阶段</option></select>
+      <label><input type="checkbox" disabled> 只看关键线路</label>
+      <label><input type="checkbox" checked disabled> 只看延误工序</label>
+    </div>
+  </div>
+  <div class="compare-gantt-wrap">
+    <div class="compare-gantt">
+      <div class="compare-gantt-head">
+        <span>任务编号</span><span>任务名称</span><span>阶段</span>
+        <div><span>2027-06</span><span>07</span><span>08</span><span>09</span><span>10</span><span>11</span><span>12</span><span>2028-01</span></div>
+      </div>
+      {% set rows = [
+        ("A-021", "地下室底板 B3 段", "地下结构", 8, 11, 5, true),
+        ("A-028", "钢构件进场验收", "主体结构", 18, 26, 9, true),
+        ("A-034", "主体钢构件吊装", "主体结构", 28, 38, 14, true),
+        ("A-041", "机电预留预埋", "机电工程", 40, 45, 6, false),
+        ("A-052", "消防联动调试", "机电工程", 58, 64, 8, true)
+      ] %}
+      {% for id, name, stage, base, adjusted, delay, critical in rows %}
+      <div class="compare-gantt-row">
+        <span class="mono-cell">{{ id }}</span>
+        <span>{% if critical %}<b class="critical-dot">◆</b>{% endif %}{{ name }}</span>
+        <span class="muted">{{ stage }}</span>
+        <div class="gantt-track">
+          <i class="base-bar" style="left: {{ base }}%; width: 18%;"></i>
+          <i class="adjusted-bar{% if critical %} critical{% endif %}" style="left: {{ adjusted }}%; width: 20%;"></i>
+          <i class="delay-bar" style="left: {{ adjusted + 17 }}%; width: {{ delay * 2 }}%;"></i>
+          <em>+{{ delay }}天</em>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="panel-section compare-panel">
+  <div class="section-head">
+    <div>
+      <h2>工序变化表</h2>
+      <p class="muted">展示内容为新增页面样式样例，后续可替换为真实对比结果。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table compare-table">
+      <thead>
+        <tr>
+          <th>任务编号</th><th>工序名称</th><th>阶段</th><th>基准开始</th><th>基准完成</th><th>调整开始</th><th>调整完成</th><th>偏差天数</th><th>关键线路变化</th><th>变化原因</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono-cell">A-021</td><td>地下室底板 B3 段</td><td>地下结构</td><td>2027-06-03</td><td>2027-06-22</td><td>2027-06-08</td><td>2027-06-27</td><td class="bad-text">+5</td><td><span class="status status-failed">新增关键</span></td><td class="wrap-cell">连续降雨导致混凝土浇筑窗口压缩。</td></tr>
+        <tr><td class="mono-cell">A-034</td><td>主体钢构件吊装</td><td>主体结构</td><td>2027-08-03</td><td>2027-08-22</td><td>2027-08-17</td><td>2027-09-05</td><td class="bad-text">+14</td><td><span class="status status-failed">新增关键</span></td><td class="wrap-cell">钢构件供应延误叠加雨季扰动。</td></tr>
+        <tr><td class="mono-cell">A-052</td><td>消防联动调试</td><td>机电工程</td><td>2027-12-05</td><td>2027-12-18</td><td>2027-12-13</td><td>2027-12-26</td><td class="bad-text">+8</td><td><span class="status status-running">受影响</span></td><td class="wrap-cell">前置钢构件吊装后移，导致联调窗口压缩。</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="compare-two-col">
+  <div class="panel-section compare-panel">
+    <h2>关键线路变化区</h2>
+    <div class="critical-path-grid">
+      <div>
+        <strong>基准关键线路</strong>
+        <span>土方开挖</span><span>底板施工</span><span>主体结构</span><span>机电移交</span><span>竣工验收</span>
+      </div>
+      <div>
+        <strong>调整后关键线路</strong>
+        <span>土方开挖</span><span>底板施工</span><span class="danger-note">钢构件吊装（新增）</span><span class="danger-note">消防联动调试（新增）</span><span>竣工验收</span>
+      </div>
+    </div>
+    <p class="muted">退出关键线路：幕墙样板段、室外管网接驳。</p>
+  </div>
+
+  <div class="panel-section compare-panel">
+    <h2>资源负荷变化区</h2>
+    <div class="resource-compare-bars">
+      <div><span>塔吊 T2</span><b style="width: 92%"></b><em>108 / 95 超载</em></div>
+      <div><span>钢构件安装班组</span><b style="width: 76%"></b><em>42 / 50 正常</em></div>
+      <div><span>混凝土泵车</span><b style="width: 84%"></b><em>28 / 30 接近上限</em></div>
+      <div><span>机电调试人员</span><b style="width: 68%"></b><em>26 / 40 正常</em></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel-section compare-panel">
+  <h2>里程碑对比区</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>里程碑名称</th><th>目标日期</th><th>基准完成日期</th><th>调整后完成日期</th><th>偏差</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>主体结构封顶</td><td>2027-09-30</td><td>2027-09-28</td><td>2027-10-12</td><td class="bad-text">+14 天</td><td><span class="status status-failed">预警</span></td></tr>
+        <tr><td>机电移交</td><td>2027-12-20</td><td>2027-12-18</td><td>2027-12-26</td><td class="bad-text">+8 天</td><td><span class="status status-running">关注</span></td></tr>
+        <tr><td>竣工验收</td><td>2028-01-30</td><td>2028-01-30</td><td>2028-02-13</td><td class="bad-text">+14 天</td><td><span class="status status-failed">超期</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or "排程系统" }}</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260707-1735">
+  <link rel="stylesheet" href="/static/app.css?v=20260709-1010">
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
   <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
 </head>
@@ -32,6 +32,9 @@
         </a>
         <a class="{% if job is defined and '/preprocess' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/preprocess{% else %}/jobs{% endif %}">
           <span>▥</span>预处理详情
+        </a>
+        <a class="{% if job is defined and '/compare' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/compare{% else %}/jobs{% endif %}">
+          <span>⇄</span>动态进度对比
         </a>
         <a class="{% if job is defined and '/edit' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/edit{% else %}/jobs{% endif %}">
           <span>⚙</span>编辑排程

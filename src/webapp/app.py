@@ -275,6 +275,19 @@ def visualize_job(request: Request, job_id: str) -> Response:
     )
 
 
+@app.get("/jobs/{job_id}/compare", response_class=HTMLResponse)
+def compare_job(request: Request, job_id: str) -> Response:
+    guard = auth.require_login(request)
+    if isinstance(guard, Response):
+        return guard
+    job = load_job(PROJECT_ROOT, job_id)
+    return templates.TemplateResponse(
+        request,
+        "compare.html",
+        {"job": job},
+    )
+
+
 @app.get("/jobs/{job_id}/visualize/data")
 def visualize_data(request: Request, job_id: str) -> Response:
     guard = auth.require_login(request)
