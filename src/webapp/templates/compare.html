@@ -9,7 +9,7 @@
   <div class="actions">
     <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/data">导出对比 JSON</a>
     <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/export.csv">导出工序 CSV</a>
-    <button type="button" class="secondary" onclick="window.print()">导出当前视图图片</button>
+    <button type="button" class="secondary" onclick="window.print()">打印/保存当前视图</button>
   </div>
 </div>
 
@@ -29,7 +29,7 @@
   <div class="compare-selector-grid">
     <div class="compare-plan-card baseline">
       <label>基准方案</label>
-      <select disabled>
+      <select>
         <option>Baseline · 基准进度</option>
       </select>
       <div class="compare-tags">
@@ -42,7 +42,7 @@
     <div class="compare-vs">VS</div>
     <div class="compare-plan-card adjusted">
       <label>调整方案</label>
-      <select disabled>
+      <select>
         <option>Current · 最新计算结果</option>
       </select>
       <div class="compare-tags">
