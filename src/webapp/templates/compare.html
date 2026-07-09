@@ -85,12 +85,13 @@
       <label><input id="changedOnly" type="checkbox"> 只看变化工序</label>
     </div>
   </div>
-  {% set timeline_width = compare.timeline.labels|length * 140 %}
+  {% set timeline_width = compare.timeline.width_px or compare.timeline.labels|length * 140 %}
+  {% set label_width = compare.timeline.label_width_px or 140 %}
   <div class="compare-gantt-wrap">
-    <div class="compare-gantt" style="--timeline-width: {{ timeline_width }}px;">
+    <div class="compare-gantt" style="--timeline-width: {{ timeline_width }}px; --timeline-label-width: {{ label_width }}px;">
       <div class="compare-gantt-head">
         <span class="sticky-col col-id">任务编号</span><span class="sticky-col col-name">任务名称</span><span class="sticky-col col-phase">阶段</span>
-        <div class="gantt-timeline-head" style="grid-template-columns: repeat({{ compare.timeline.labels|length }}, 140px);">
+        <div class="gantt-timeline-head" style="grid-template-columns: repeat({{ compare.timeline.labels|length }}, minmax({{ label_width }}px, 1fr));">
           {% for label in compare.timeline.labels %}
           <span>{{ label }}</span>
           {% endfor %}
@@ -113,9 +114,9 @@
           {% endif %}
           {% if row.finish_delta_days > 0 %}
           <i class="delay-bar" style="left: {{ row.delay_left }}%; width: {{ row.delay_width }}%;"></i>
-          <em>+{{ row.finish_delta_days }}天</em>
+          <em style="left: {{ row.delta_label_left }}%;">+{{ row.finish_delta_days }}天</em>
           {% elif row.finish_delta_days < 0 %}
-          <em class="good-text">{{ row.finish_delta_days }}天</em>
+          <em class="good-text" style="left: {{ row.delta_label_left }}%;">{{ row.finish_delta_days }}天</em>
           {% endif %}
         </div>
       </div>

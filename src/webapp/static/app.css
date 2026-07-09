@@ -1537,12 +1537,13 @@ input[type="number"],
 
 .gantt-track em {
   position: absolute;
-  right: 12px;
   top: 22px;
+  transform: translateX(8px);
   color: #b42318;
   font-style: normal;
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .compare-table {

@@ -199,8 +199,14 @@ def build_compare_payload(current: dict[str, Any], baseline: dict[str, Any] | No
         diff["base_width"] = percent_width(diff["base_start_date"], diff["base_finish_date"], total_days)
         diff["adjusted_left"] = percent_offset(diff["adjusted_start_date"], range_start, total_days)
         diff["adjusted_width"] = percent_width(diff["adjusted_start_date"], diff["adjusted_finish_date"], total_days)
-        diff["delay_left"] = min(100, diff["adjusted_left"] + diff["adjusted_width"])
-        diff["delay_width"] = min(20, max(0, abs(diff["finish_delta_days"]) * 1.2))
+        if diff["finish_delta_days"] > 0 and diff["base_finish_date"] and diff["adjusted_finish_date"]:
+            diff["delay_left"] = percent_offset(diff["base_finish_date"], range_start, total_days)
+            diff["delay_width"] = percent_width(diff["base_finish_date"], diff["adjusted_finish_date"], total_days)
+        else:
+            diff["delay_left"] = 0
+            diff["delay_width"] = 0
+        label_date = diff["adjusted_finish_date"] or diff["base_finish_date"]
+        diff["delta_label_left"] = min(99, percent_offset(label_date, range_start, total_days) + 1)
 
     task_diffs = sorted(
         task_diffs,
@@ -251,7 +257,7 @@ def build_compare_payload(current: dict[str, Any], baseline: dict[str, Any] | No
         "timeline": {
             "start": format_date(range_start),
             "finish": format_date(range_finish),
-            "labels": month_labels(range_start, range_finish),
+            **timeline_config(range_start, range_finish),
         },
         "tasks": task_diffs,
         "changed_tasks": changed_tasks,
@@ -581,12 +587,55 @@ def month_labels(start: date | None, finish: date | None) -> list[str]:
     labels = []
     current = date(start.year, start.month, 1)
     end = date(finish.year, finish.month, 1)
-    while current <= end and len(labels) < 18:
+    while current <= end:
         labels.append(current.strftime("%Y-%m"))
         year = current.year + (1 if current.month == 12 else 0)
         month = 1 if current.month == 12 else current.month + 1
         current = date(year, month, 1)
     return labels
+
+
+def timeline_config(start: date | None, finish: date | None) -> dict[str, Any]:
+    if not start or not finish:
+        return {"labels": [], "scale": "month", "width_px": 1120, "label_width_px": 140}
+    months = (finish.year - start.year) * 12 + finish.month - start.month + 1
+    if months <= 30:
+        labels = month_labels(start, finish)
+        label_width = 140
+        scale = "month"
+    elif months <= 84:
+        labels = quarter_labels(start, finish)
+        label_width = 170
+        scale = "quarter"
+    else:
+        labels = year_labels(start, finish)
+        label_width = 190
+        scale = "year"
+    return {
+        "labels": labels,
+        "scale": scale,
+        "width_px": max(1120, len(labels) * label_width),
+        "label_width_px": label_width,
+    }
+
+
+def quarter_labels(start: date, finish: date) -> list[str]:
+    labels = []
+    current = date(start.year, ((start.month - 1) // 3) * 3 + 1, 1)
+    end = date(finish.year, ((finish.month - 1) // 3) * 3 + 1, 1)
+    while current <= end:
+        labels.append(f"{current.year}-Q{((current.month - 1) // 3) + 1}")
+        month = current.month + 3
+        year = current.year
+        if month > 12:
+            year += 1
+            month -= 12
+        current = date(year, month, 1)
+    return labels
+
+
+def year_labels(start: date, finish: date) -> list[str]:
+    return [str(year) for year in range(start.year, finish.year + 1)]
 
 
 def format_path_task(task: dict[str, Any]) -> str:
