@@ -20,6 +20,7 @@ from blackboard.excel_store import ExcelBlackboardStore
 from main_real_case_workflow import PROJECT_ROOT, run_real_case_workflow
 from webapp import auth
 from webapp.adjustments import EVENT_PRESETS, apply_schedule_adjustment, current_project_start_date
+from webapp.compare import build_compare_payload, task_diffs_to_csv
 from webapp.editors import RESOURCE_EDIT_FIELDS, WBS_EDIT_FIELDS, save_resource_rows, save_wbs_rows
 from webapp.jobs import (
     cleanup_interrupted_jobs,
@@ -275,6 +276,20 @@ def visualize_job(request: Request, job_id: str) -> Response:
     )
 
 
+@app.get("/jobs/{job_id}/compare", response_class=HTMLResponse)
+def compare_job(request: Request, job_id: str) -> Response:
+    guard = auth.require_login(request)
+    if isinstance(guard, Response):
+        return guard
+    job = load_job(PROJECT_ROOT, job_id)
+    compare = build_job_compare_payload(job)
+    return templates.TemplateResponse(
+        request,
+        "compare.html",
+        {"job": job, "compare": compare},
+    )
+
+
 @app.get("/jobs/{job_id}/visualize/data")
 def visualize_data(request: Request, job_id: str) -> Response:
     guard = auth.require_login(request)
@@ -286,6 +301,29 @@ def visualize_data(request: Request, job_id: str) -> Response:
     baseline = read_json(visual_export_path(job.context.outputs_root, "baseline_visual_data"))
     data = build_visual_payload(store, baseline=baseline)
     return JSONResponse(data)
+
+
+@app.get("/jobs/{job_id}/compare/data")
+def compare_data(request: Request, job_id: str) -> Response:
+    guard = auth.require_login(request)
+    if isinstance(guard, Response):
+        return guard
+    job = load_job(PROJECT_ROOT, job_id)
+    return JSONResponse(build_job_compare_payload(job))
+
+
+@app.get("/jobs/{job_id}/compare/export.csv")
+def compare_export_csv(request: Request, job_id: str) -> Response:
+    guard = auth.require_login(request)
+    if isinstance(guard, Response):
+        return guard
+    job = load_job(PROJECT_ROOT, job_id)
+    csv_text = task_diffs_to_csv(build_job_compare_payload(job))
+    return Response(
+        "\ufeff" + csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="compare-{job_id}.csv"'},
+    )
 
 
 @app.post("/jobs/{job_id}/run")
@@ -699,6 +737,14 @@ def fallback_result_detected(store: ExcelBlackboardStore) -> bool:
             if owner == "fallback_scheduler" or "rules_fallback" in source or "Fallback" in note:
                 return True
     return False
+
+
+def build_job_compare_payload(job: Any) -> dict[str, Any]:
+    store = ExcelBlackboardStore(job.context.blackboard_path)
+    store.initialize()
+    baseline = read_json(visual_export_path(job.context.outputs_root, "baseline_visual_data"))
+    current = build_visual_payload(store, baseline=baseline)
+    return build_compare_payload(current, baseline)
 
 
 def assess_result_quality(

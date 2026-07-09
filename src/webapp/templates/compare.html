@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head compare-head">
+  <div>
+    <a class="back-link" href="/jobs/{{ job.job_id }}">← 返回任务详情</a>
+    <h1>动态进度对比</h1>
+    <div class="muted">任务 {{ job.metadata.name or job.job_id }} · 对比基准方案与调整方案的工期、关键线路、资源冲突和里程碑偏差。</div>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/data">导出对比 JSON</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/export.csv">导出工序 CSV</a>
+    <button type="button" class="secondary" onclick="window.print()">导出当前视图图片</button>
+  </div>
+</div>
+
+{% if not compare.has_baseline %}
+<div class="notice">
+  当前任务还没有可用的基准方案快照。系统会在首次生成结果时保存基准；你也可以在进度看板导入外部基准 JSON 后对比。
+</div>
+{% endif %}
+
+<section class="panel-section compare-panel">
+  <div class="section-head">
+    <div>
+      <h2>方案选择</h2>
+      <p class="muted">当前版本使用本任务已保存的基准快照与最新计算结果进行对比。</p>
+    </div>
+  </div>
+  <div class="compare-selector-grid">
+    <div class="compare-plan-card baseline">
+      <label>基准方案</label>
+      <select disabled>
+        <option>Baseline · 基准进度</option>
+      </select>
+      <div class="compare-tags">
+        <span>任务 {{ compare.baseline.task_count }}</span>
+        <span>总工期 {{ compare.baseline.duration_days }} 天</span>
+        <span>开工 {{ compare.baseline.start }}</span>
+        <span>完工 {{ compare.baseline.finish }}</span>
+      </div>
+    </div>
+    <div class="compare-vs">VS</div>
+    <div class="compare-plan-card adjusted">
+      <label>调整方案</label>
+      <select disabled>
+        <option>Current · 最新计算结果</option>
+      </select>
+      <div class="compare-tags">
+        <span>任务 {{ compare.adjusted.task_count }}</span>
+        <span>总工期 {{ compare.adjusted.duration_days }} 天</span>
+        <span>开工 {{ compare.adjusted.start }}</span>
+        <span>完工 {{ compare.adjusted.finish }}</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="compare-metrics">
+  <div><span>总工期偏差</span><strong class="{% if compare.metrics.duration_delta_days > 0 %}bad-text{% elif compare.metrics.duration_delta_days < 0 %}good-text{% endif %}">{{ "%+d"|format(compare.metrics.duration_delta_days) }} 天</strong><small>{% if compare.metrics.duration_delta_days > 0 %}延误{% elif compare.metrics.duration_delta_days < 0 %}提前{% else %}不变{% endif %}</small></div>
+  <div><span>完工日期变化</span><strong class="{% if compare.metrics.finish_delta_days > 0 %}bad-text{% elif compare.metrics.finish_delta_days < 0 %}good-text{% endif %}">{{ compare.baseline.finish }} → {{ compare.adjusted.finish }}</strong><small>{{ "%+d"|format(compare.metrics.finish_delta_days) }} 天</small></div>
+  <div><span>关键线路变化</span><strong class="{% if compare.metrics.critical_added_count %}bad-text{% endif %}">新增 {{ compare.metrics.critical_added_count }} 个</strong><small>关键工序</small></div>
+  <div><span>延误工序数量</span><strong class="{% if compare.metrics.delayed_task_count %}bad-text{% endif %}">{{ compare.metrics.delayed_task_count }} 个</strong><small>需关注</small></div>
+  <div><span>资源冲突变化</span><strong class="{% if compare.metrics.resource_conflict_count %}warn-text{% endif %}">{{ compare.metrics.resource_conflict_count }} 项</strong><small>{{ "%+d"|format(compare.metrics.resource_conflict_delta) }}</small></div>
+</section>
+
+<section class="panel-section compare-panel">
+  <div class="section-head">
+    <div>
+      <h2>主体甘特图对比</h2>
+      <p class="muted">浅蓝为基准计划，深蓝为调整后计划，红色表示延误范围，红点表示关键工序。</p>
+    </div>
+    <div class="compare-filter-row">
+      <select id="phaseFilter">
+        <option value="">全部阶段</option>
+        {% for phase in compare.filters.phases %}
+        <option value="{{ phase }}">{{ phase }}</option>
+        {% endfor %}
+      </select>
+      <label><input id="criticalOnly" type="checkbox"> 只看关键线路</label>
+      <label><input id="changedOnly" type="checkbox"> 只看变化工序</label>
+    </div>
+  </div>
+  <div class="compare-gantt-wrap">
+    <div class="compare-gantt">
+      <div class="compare-gantt-head">
+        <span>任务编号</span><span>任务名称</span><span>阶段</span>
+        <div>
+          {% for label in compare.timeline.labels %}
+          <span>{{ label }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% for row in compare.tasks %}
+      <div class="compare-gantt-row"
+           data-phase="{{ row.phase }}"
+           data-critical="{{ '1' if row.adjusted_critical else '0' }}"
+           data-changed="{{ '1' if row.changed else '0' }}">
+        <span class="mono-cell">{{ row.task_id }}</span>
+        <span>{% if row.adjusted_critical %}<b class="critical-dot">●</b>{% endif %}{{ row.task_name }}</span>
+        <span class="muted">{{ row.phase }}</span>
+        <div class="gantt-track">
+          {% if row.base_width %}
+          <i class="base-bar" style="left: {{ row.base_left }}%; width: {{ row.base_width }}%;"></i>
+          {% endif %}
+          {% if row.adjusted_width %}
+          <i class="adjusted-bar{% if row.adjusted_critical %} critical{% endif %}" style="left: {{ row.adjusted_left }}%; width: {{ row.adjusted_width }}%;"></i>
+          {% endif %}
+          {% if row.finish_delta_days > 0 %}
+          <i class="delay-bar" style="left: {{ row.delay_left }}%; width: {{ row.delay_width }}%;"></i>
+          <em>+{{ row.finish_delta_days }}天</em>
+          {% elif row.finish_delta_days < 0 %}
+          <em class="good-text">{{ row.finish_delta_days }}天</em>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="panel-section compare-panel">
+  <div class="section-head">
+    <div>
+      <h2>工序变化表</h2>
+      <p class="muted">按任务编号对齐基准与调整后结果，显示日期偏差、关键线路变化和变化原因。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table compare-table">
+      <thead>
+        <tr>
+          <th>任务编号</th><th>工序名称</th><th>阶段</th><th>基准开始</th><th>基准完成</th><th>调整开始</th><th>调整完成</th><th>偏差天数</th><th>关键线路变化</th><th>变化原因</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in compare.changed_tasks %}
+        <tr>
+          <td class="mono-cell">{{ row.task_id }}</td>
+          <td>{{ row.task_name }}</td>
+          <td>{{ row.phase }}</td>
+          <td>{{ row.base_start }}</td>
+          <td>{{ row.base_finish }}</td>
+          <td>{{ row.adjusted_start }}</td>
+          <td>{{ row.adjusted_finish }}</td>
+          <td class="{% if row.finish_delta_days > 0 %}bad-text{% elif row.finish_delta_days < 0 %}good-text{% endif %}">{{ "%+d"|format(row.finish_delta_days) }}</td>
+          <td><span class="status {% if row.critical_change in ['新增关键', '新增工序'] %}status-failed{% elif row.critical_change == '退出关键' %}status-running{% else %}status-succeeded{% endif %}">{{ row.critical_change }}</span></td>
+          <td class="wrap-cell">{{ row.change_reason }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="10" class="empty-state">暂无变化工序。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="compare-two-col">
+  <div class="panel-section compare-panel">
+    <h2>关键线路变化区</h2>
+    <div class="critical-path-grid">
+      <div>
+        <strong>基准关键线路</strong>
+        {% for item in compare.critical_paths.baseline %}
+        <span>{{ item }}</span>
+        {% else %}
+        <span>暂无基准关键线路</span>
+        {% endfor %}
+      </div>
+      <div>
+        <strong>调整后关键线路</strong>
+        {% for item in compare.critical_paths.adjusted %}
+        <span class="{% if item.split(' ')[0] in compare.critical_paths.added %}danger-note{% endif %}">{{ item }}</span>
+        {% else %}
+        <span>暂无调整后关键线路</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% if compare.critical_paths.removed %}
+    <p class="muted">退出关键线路：{{ compare.critical_paths.removed|join("、") }}</p>
+    {% endif %}
+  </div>
+
+  <div class="panel-section compare-panel">
+    <h2>资源负荷变化区</h2>
+    <div class="resource-compare-bars">
+      {% for row in compare.resources %}
+      <div>
+        <span>{{ row.resource_name }}</span>
+        <b style="width: {{ row.load_percent }}%"></b>
+        <em class="{% if row.conflict %}bad-text{% endif %}">{{ row.adjusted_demand }} / {{ row.capacity }}{% if row.conflict %} 超载{% endif %}（{{ "%+g"|format(row.delta) }}）</em>
+      </div>
+      {% else %}
+      <div class="empty-state">暂无资源负荷对比数据。</div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="panel-section compare-panel">
+  <h2>里程碑对比区</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>里程碑名称</th><th>目标日期</th><th>基准完成日期</th><th>调整后完成日期</th><th>偏差</th><th>状态</th></tr></thead>
+      <tbody>
+        {% for row in compare.milestones %}
+        <tr>
+          <td>{{ row.milestone_name }}</td>
+          <td>{{ row.target_date }}</td>
+          <td>{{ row.baseline_actual }}</td>
+          <td>{{ row.adjusted_actual }}</td>
+          <td class="{% if row.delta_days > 0 %}bad-text{% elif row.delta_days < 0 %}good-text{% endif %}">{{ "%+d"|format(row.delta_days) }} 天</td>
+          <td><span class="status {% if row.status in ['未通过', '失败'] %}status-failed{% elif row.status in ['警告'] %}status-running{% else %}status-succeeded{% endif %}">{{ row.status }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state">暂无里程碑对比数据。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+  const phaseFilter = document.getElementById("phaseFilter");
+  const criticalOnly = document.getElementById("criticalOnly");
+  const changedOnly = document.getElementById("changedOnly");
+  function applyCompareFilters() {
+    const phase = phaseFilter ? phaseFilter.value : "";
+    document.querySelectorAll(".compare-gantt-row").forEach(row => {
+      const phaseOk = !phase || row.dataset.phase === phase;
+      const criticalOk = !criticalOnly.checked || row.dataset.critical === "1";
+      const changedOk = !changedOnly.checked || row.dataset.changed === "1";
+      row.style.display = phaseOk && criticalOk && changedOk ? "" : "none";
+    });
+  }
+  [phaseFilter, criticalOnly, changedOnly].forEach(control => {
+    if (control) control.addEventListener("change", applyCompareFilters);
+  });
+</script>
+{% endblock %}
