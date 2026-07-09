@@ -18,7 +18,7 @@ from tests.helpers import (
 from tools.case_context import resolve_web_case_context
 from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
-from webapp.compare import build_compare_payload, build_job_compare_data, save_scenario_snapshot, task_diffs_to_csv
+from webapp.compare import build_compare_payload, build_job_compare_data, compare_gantt_to_png, save_scenario_snapshot, task_diffs_to_csv
 from webapp.editors import save_resource_rows, save_wbs_rows
 from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
 from webapp.preprocess import build_readiness, preprocess_job_documents
@@ -297,6 +297,7 @@ def test_compare_payload_detects_delays_and_exports_csv() -> None:
     assert compare["metrics"]["resource_conflict_count"] == 1
     assert compare["changed_tasks"][0]["critical_change"] == "新增关键"
     assert "TASK-1" in csv_text
+    assert compare_gantt_to_png(compare).startswith(b"\x89PNG")
 
 
 def test_scenario_snapshot_is_available_for_compare_selectors(tmp_path: Path) -> None:
@@ -325,6 +326,26 @@ def test_scenario_snapshot_is_available_for_compare_selectors(tmp_path: Path) ->
 
     option_names = [option["name"] for option in compare["scenario_options"]]
     assert "连续暴雨调整" in option_names
+    assert compare["selected"]["baseline"] == scenario["id"]
+
+
+def test_named_baseline_snapshot_is_default_compare_baseline(tmp_path: Path) -> None:
+    store = ExcelBlackboardStore(tmp_path / "blackboard.xlsx")
+    store.initialize()
+    store.replace_rows("parameter_checklist", minimal_parameter_checklist())
+    store.replace_rows("project_parameters", build_project_parameter_rows(minimal_parameter_checklist()))
+    store.replace_rows("wbs_tasks_final", minimal_wbs_rows())
+    store.replace_rows("resource_plan_final", minimal_resource_rows())
+    recalculate_blackboard_outputs(store, tmp_path / "outputs", title="pytest")
+
+    scenario = save_scenario_snapshot(
+        store,
+        tmp_path / "outputs",
+        name="Case 0 最新任务基准方案",
+        kind="baseline",
+    )
+    compare = build_job_compare_data(store, tmp_path / "outputs", baseline_payload=None)
+
     assert compare["selected"]["baseline"] == scenario["id"]
 
 

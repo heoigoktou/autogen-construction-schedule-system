@@ -31,7 +31,7 @@ def build_job_compare_data(
 ) -> dict[str, Any]:
     current_payload = build_visual_payload(store, baseline=baseline_payload)
     scenarios = list_scenarios(outputs_root, current_payload=current_payload, baseline_payload=baseline_payload)
-    baseline_id = baseline_id or BASELINE_SCENARIO_ID
+    baseline_id = baseline_id or default_baseline_scenario_id(scenarios, has_builtin_baseline=bool(baseline_payload))
     adjusted_id = adjusted_id or CURRENT_SCENARIO_ID
     baseline = load_scenario_payload(outputs_root, baseline_id, current_payload, baseline_payload)
     adjusted = load_scenario_payload(outputs_root, adjusted_id, current_payload, baseline_payload)
@@ -87,7 +87,7 @@ def list_scenarios(
         options.append(
             {
                 "id": BASELINE_SCENARIO_ID,
-                "name": "Baseline · 基准进度",
+                "name": "Original Snapshot · 原始快照",
                 "kind": "baseline",
                 "created_at": "",
                 "task_count": summary["task_count"],
@@ -111,6 +111,13 @@ def list_scenarios(
     )
     options.extend(read_manifest(outputs_root))
     return options
+
+
+def default_baseline_scenario_id(scenarios: list[dict[str, Any]], *, has_builtin_baseline: bool) -> str:
+    for option in reversed(scenarios):
+        if option.get("kind") == "baseline" and option.get("id") != BASELINE_SCENARIO_ID:
+            return str(option.get("id") or BASELINE_SCENARIO_ID)
+    return BASELINE_SCENARIO_ID if has_builtin_baseline else CURRENT_SCENARIO_ID
 
 
 def load_scenario_payload(
@@ -415,6 +422,108 @@ def task_diffs_to_csv(compare: dict[str, Any]) -> str:
             row["change_reason"],
         ])
     return output.getvalue()
+
+
+def compare_gantt_to_png(compare: dict[str, Any]) -> bytes:
+    """Render the baseline-vs-adjusted Gantt comparison as a downloadable PNG."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    from tools.visualization_tools import _configure_matplotlib
+
+    _configure_matplotlib()
+    tasks = list(compare.get("tasks") or [])
+    if not tasks:
+        raise ValueError("No compare tasks to render.")
+
+    dates = []
+    for row in tasks:
+        for key in ("base_start", "base_finish", "adjusted_start", "adjusted_finish"):
+            value = parse_date(row.get(key))
+            if value:
+                dates.append(value)
+    start = min(dates) if dates else date.today()
+    finish = max(dates) if dates else start
+    height = min(max(7, len(tasks) * 0.34 + 2.4), 34)
+    fig, ax = plt.subplots(figsize=(18, height), constrained_layout=True)
+
+    base_color = "#93C5FD"
+    adjusted_color = "#1F5FAE"
+    critical_color = "#B91C1C"
+    y_positions = list(range(len(tasks)))
+
+    for y, row in zip(y_positions, tasks, strict=True):
+        base_start = parse_date(row.get("base_start"))
+        base_finish = parse_date(row.get("base_finish"))
+        adjusted_start = parse_date(row.get("adjusted_start"))
+        adjusted_finish = parse_date(row.get("adjusted_finish"))
+        if base_start and base_finish:
+            ax.barh(
+                y + 0.16,
+                max(1, (base_finish - base_start).days + 1),
+                left=mdates.date2num(base_start),
+                height=0.22,
+                color=base_color,
+                edgecolor="none",
+            )
+        if adjusted_start and adjusted_finish:
+            ax.barh(
+                y - 0.16,
+                max(1, (adjusted_finish - adjusted_start).days + 1),
+                left=mdates.date2num(adjusted_start),
+                height=0.22,
+                color=adjusted_color,
+                edgecolor="none",
+            )
+        if row.get("adjusted_critical"):
+            marker_date = adjusted_start or base_start
+            if marker_date:
+                ax.scatter(mdates.date2num(marker_date), y, s=16, color=critical_color, zorder=3)
+        delta = int(row.get("finish_delta_days") or 0)
+        if delta:
+            color = critical_color if delta > 0 else "#0F766E"
+            ax.text(
+                mdates.date2num(finish) + 8,
+                y,
+                f"{delta:+d}d",
+                va="center",
+                ha="left",
+                fontsize=7,
+                color=color,
+            )
+
+    labels = [f"{row.get('task_id', '')}  {_truncate_text(str(row.get('task_name') or ''), 18)}" for row in tasks]
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(labels, fontsize=7)
+    ax.invert_yaxis()
+    ax.set_xlim(mdates.date2num(start) - 5, mdates.date2num(finish) + 45)
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=max(1, int(len(month_labels(start, finish)) / 12) or 1)))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    ax.grid(axis="x", color="#E2E8F0", linewidth=0.8)
+    ax.set_axisbelow(True)
+    ax.set_xlabel("Date")
+    ax.set_title("Baseline vs Adjusted Gantt Comparison", fontsize=14, pad=14)
+    ax.legend(
+        handles=[
+            plt.Line2D([0], [0], color=base_color, linewidth=6, label="Baseline"),
+            plt.Line2D([0], [0], color=adjusted_color, linewidth=6, label="Adjusted"),
+            plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=critical_color, label="Critical", markersize=6),
+        ],
+        loc="upper right",
+    )
+    output = io.BytesIO()
+    fig.savefig(output, format="png", dpi=180, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    return output.getvalue()
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
 def infer_change_reason(start_delta: int, finish_delta: int, critical_change: str) -> str:

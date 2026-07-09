@@ -9,6 +9,7 @@
   <div class="actions">
     <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/data?base={{ compare.selected.baseline }}&adjusted={{ compare.selected.adjusted }}">导出对比 JSON</a>
     <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/export.csv?base={{ compare.selected.baseline }}&adjusted={{ compare.selected.adjusted }}">导出工序 CSV</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/gantt.png?base={{ compare.selected.baseline }}&adjusted={{ compare.selected.adjusted }}">下载甘特图 PNG</a>
     <button type="button" class="secondary" onclick="window.print()">打印/保存当前视图</button>
   </div>
 </div>

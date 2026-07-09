@@ -20,7 +20,7 @@ from blackboard.excel_store import ExcelBlackboardStore
 from main_real_case_workflow import PROJECT_ROOT, run_real_case_workflow
 from webapp import auth
 from webapp.adjustments import EVENT_PRESETS, apply_schedule_adjustment, current_project_start_date
-from webapp.compare import build_job_compare_data, save_scenario_snapshot, task_diffs_to_csv
+from webapp.compare import build_job_compare_data, compare_gantt_to_png, save_scenario_snapshot, task_diffs_to_csv
 from webapp.editors import RESOURCE_EDIT_FIELDS, WBS_EDIT_FIELDS, save_resource_rows, save_wbs_rows
 from webapp.jobs import (
     cleanup_interrupted_jobs,
@@ -323,6 +323,25 @@ def compare_export_csv(request: Request, job_id: str, base: str = "", adjusted: 
         "\ufeff" + csv_text,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="compare-{job_id}.csv"'},
+    )
+
+
+@app.get("/jobs/{job_id}/compare/gantt.png")
+def compare_gantt_png(request: Request, job_id: str, base: str = "", adjusted: str = "") -> Response:
+    guard = auth.require_login(request)
+    if isinstance(guard, Response):
+        return guard
+    job = load_job(PROJECT_ROOT, job_id)
+    png = compare_gantt_to_png(build_job_compare_payload(job, baseline_id=base or None, adjusted_id=adjusted or None))
+    return Response(
+        png,
+        media_type="image/png",
+        headers={
+            "Content-Disposition": f'attachment; filename="compare-gantt-{job_id}.png"',
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
     )
 
 
