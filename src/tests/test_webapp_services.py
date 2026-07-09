@@ -18,6 +18,7 @@ from tests.helpers import (
 from tools.case_context import resolve_web_case_context
 from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
+from webapp.compare import build_compare_payload, task_diffs_to_csv
 from webapp.editors import save_resource_rows, save_wbs_rows
 from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
 from webapp.preprocess import build_readiness, preprocess_job_documents
@@ -254,6 +255,46 @@ def test_default_run_mode_prefers_recalculate_when_tables_exist(tmp_path: Path) 
 
     assert webapp_app.default_run_mode({"wbs_tasks_final": 1, "resource_plan_final": 1}, {}) == "recalculate"
     assert webapp_app.default_run_mode({"wbs_tasks_final": 0, "resource_plan_final": 0}, {"run_mode": "light"}) == "light"
+
+
+def test_compare_payload_detects_delays_and_exports_csv() -> None:
+    baseline = {
+        "tasks": [
+            {
+                "task_id": "TASK-1",
+                "task_name": "foundation",
+                "phase": "foundation",
+                "planned_start": "2026-03-01",
+                "planned_finish": "2026-03-10",
+                "is_critical": False,
+            }
+        ],
+        "resource_load": [{"resource_name": "crew", "demand": 5, "capacity": 10, "conflict_flag": False}],
+        "milestones": [{"milestone_id": "MS-1", "milestone_name": "finish", "actual_date": "2026-03-10"}],
+    }
+    current = {
+        "tasks": [
+            {
+                "task_id": "TASK-1",
+                "task_name": "foundation",
+                "phase": "foundation",
+                "planned_start": "2026-03-03",
+                "planned_finish": "2026-03-15",
+                "is_critical": True,
+            }
+        ],
+        "resource_load": [{"resource_name": "crew", "demand": 12, "capacity": 10, "conflict_flag": True}],
+        "milestones": [{"milestone_id": "MS-1", "milestone_name": "finish", "actual_date": "2026-03-15", "result": "未通过"}],
+    }
+
+    compare = build_compare_payload(current, baseline)
+    csv_text = task_diffs_to_csv(compare)
+
+    assert compare["metrics"]["finish_delta_days"] == 5
+    assert compare["metrics"]["critical_added_count"] == 1
+    assert compare["metrics"]["resource_conflict_count"] == 1
+    assert compare["changed_tasks"][0]["critical_change"] == "新增关键"
+    assert "TASK-1" in csv_text
 
 
 def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
