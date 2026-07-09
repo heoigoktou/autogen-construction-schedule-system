@@ -14,6 +14,7 @@ from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
 from webapp.editors import save_resource_rows, save_wbs_rows
 from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
+from webapp.preprocess import preprocess_job_documents
 from webapp.services import artifact_path, list_existing_artifacts, recalculate_blackboard_outputs
 
 
@@ -114,6 +115,37 @@ def test_create_job_writes_metadata_and_blackboard(tmp_path: Path) -> None:
     assert job.metadata["status"] == "queued"
     assert job.context.blackboard_path.exists()
     assert job.context.runtime_log.parent.exists()
+
+
+def test_preprocess_merges_existing_parameter_checklist(tmp_path: Path) -> None:
+    input_dir = tmp_path / "uploads"
+    input_dir.mkdir()
+    (input_dir / "case.md").write_text("# case\nNo structured parameters in this document.", encoding="utf-8")
+    blackboard_path = tmp_path / "blackboard.xlsx"
+    store = ExcelBlackboardStore(blackboard_path)
+    store.initialize()
+    checklist = minimal_parameter_checklist()
+    checklist.append(
+        {
+            **checklist[0],
+            "parameter_id": "P-016",
+            "category": "technical_boundary",
+            "name": "foundation_type",
+            "value": "raft foundation",
+            "note": "manual checklist value",
+        }
+    )
+    store.replace_rows("parameter_checklist", checklist)
+
+    result = preprocess_job_documents(input_dir, tmp_path / "outputs", blackboard_path)
+
+    assert result.package["summary"]["recognized_parameter_count"] >= len(checklist)
+    recognized_ids = {row["parameter_id"] for row in result.package["recognized_parameters"]}
+    missing_ids = {row["parameter_id"] for row in result.package["missing_required_parameters"]}
+    assert "P-016" in recognized_ids
+    assert "P-016" not in missing_ids
+    reloaded = ExcelBlackboardStore(blackboard_path)
+    assert len(reloaded.read_rows("parameter_checklist")) >= len(checklist)
 
 
 def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

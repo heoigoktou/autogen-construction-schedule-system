@@ -55,7 +55,9 @@ def preprocess_job_documents(
 
     store = ExcelBlackboardStore(blackboard_path)
     store.initialize()
+    manual_checklist = store.read_rows("parameter_checklist")
     manual_parameters = store.read_rows("project_parameters")
+    parameter_rows = merge_manual_parameters(parameter_rows, manual_checklist)
     parameter_rows = merge_manual_parameters(parameter_rows, manual_parameters)
 
     package = build_standardized_package(
