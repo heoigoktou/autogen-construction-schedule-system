@@ -7,8 +7,8 @@
     <div class="muted">任务 {{ job.metadata.name or job.job_id }} · 对比基准方案与调整方案的工期、关键线路、资源冲突和里程碑偏差。</div>
   </div>
   <div class="actions">
-    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/data">导出对比 JSON</a>
-    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/export.csv">导出工序 CSV</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/data?base={{ compare.selected.baseline }}&adjusted={{ compare.selected.adjusted }}">导出对比 JSON</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/compare/export.csv?base={{ compare.selected.baseline }}&adjusted={{ compare.selected.adjusted }}">导出工序 CSV</a>
     <button type="button" class="secondary" onclick="window.print()">打印/保存当前视图</button>
   </div>
 </div>
@@ -26,11 +26,13 @@
       <p class="muted">当前版本使用本任务已保存的基准快照与最新计算结果进行对比。</p>
     </div>
   </div>
-  <div class="compare-selector-grid">
+  <form method="get" class="compare-selector-grid" id="scenarioCompareForm">
     <div class="compare-plan-card baseline">
       <label>基准方案</label>
-      <select>
-        <option>Baseline · 基准进度</option>
+      <select name="base" onchange="document.getElementById('scenarioCompareForm').submit()">
+        {% for option in compare.scenario_options %}
+        <option value="{{ option.id }}" {% if option.id == compare.selected.baseline %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
       </select>
       <div class="compare-tags">
         <span>任务 {{ compare.baseline.task_count }}</span>
@@ -42,8 +44,10 @@
     <div class="compare-vs">VS</div>
     <div class="compare-plan-card adjusted">
       <label>调整方案</label>
-      <select>
-        <option>Current · 最新计算结果</option>
+      <select name="adjusted" onchange="document.getElementById('scenarioCompareForm').submit()">
+        {% for option in compare.scenario_options %}
+        <option value="{{ option.id }}" {% if option.id == compare.selected.adjusted %}selected{% endif %}>{{ option.name }}</option>
+        {% endfor %}
       </select>
       <div class="compare-tags">
         <span>任务 {{ compare.adjusted.task_count }}</span>
@@ -52,7 +56,7 @@
         <span>完工 {{ compare.adjusted.finish }}</span>
       </div>
     </div>
-  </div>
+  </form>
 </section>
 
 <section class="compare-metrics">

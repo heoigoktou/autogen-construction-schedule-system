@@ -112,6 +112,10 @@
         <div><span>进度</span><strong>{{ table_counts.schedule_initial }}</strong></div>
         <div><span>CPM</span><strong>{{ table_counts.cpm_analysis }}</strong></div>
       </div>
+      <label class="form-field">
+        <span>方案名称</span>
+        <input type="text" name="scenario_name" placeholder="例如：连续暴雨调整方案 / 消防规范升级方案">
+      </label>
       <div class="run-mode-grid" role="radiogroup" aria-label="运行模式">
         <label class="run-mode-card">
           <input type="radio" name="run_mode" value="recalculate" {% if default_run_mode == "recalculate" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>

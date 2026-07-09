@@ -20,7 +20,7 @@ from blackboard.excel_store import ExcelBlackboardStore
 from main_real_case_workflow import PROJECT_ROOT, run_real_case_workflow
 from webapp import auth
 from webapp.adjustments import EVENT_PRESETS, apply_schedule_adjustment, current_project_start_date
-from webapp.compare import build_compare_payload, task_diffs_to_csv
+from webapp.compare import build_job_compare_data, save_scenario_snapshot, task_diffs_to_csv
 from webapp.editors import RESOURCE_EDIT_FIELDS, WBS_EDIT_FIELDS, save_resource_rows, save_wbs_rows
 from webapp.jobs import (
     cleanup_interrupted_jobs,
@@ -277,12 +277,12 @@ def visualize_job(request: Request, job_id: str) -> Response:
 
 
 @app.get("/jobs/{job_id}/compare", response_class=HTMLResponse)
-def compare_job(request: Request, job_id: str) -> Response:
+def compare_job(request: Request, job_id: str, base: str = "", adjusted: str = "") -> Response:
     guard = auth.require_login(request)
     if isinstance(guard, Response):
         return guard
     job = load_job(PROJECT_ROOT, job_id)
-    compare = build_job_compare_payload(job)
+    compare = build_job_compare_payload(job, baseline_id=base or None, adjusted_id=adjusted or None)
     return templates.TemplateResponse(
         request,
         "compare.html",
@@ -304,21 +304,21 @@ def visualize_data(request: Request, job_id: str) -> Response:
 
 
 @app.get("/jobs/{job_id}/compare/data")
-def compare_data(request: Request, job_id: str) -> Response:
+def compare_data(request: Request, job_id: str, base: str = "", adjusted: str = "") -> Response:
     guard = auth.require_login(request)
     if isinstance(guard, Response):
         return guard
     job = load_job(PROJECT_ROOT, job_id)
-    return JSONResponse(build_job_compare_payload(job))
+    return JSONResponse(build_job_compare_payload(job, baseline_id=base or None, adjusted_id=adjusted or None))
 
 
 @app.get("/jobs/{job_id}/compare/export.csv")
-def compare_export_csv(request: Request, job_id: str) -> Response:
+def compare_export_csv(request: Request, job_id: str, base: str = "", adjusted: str = "") -> Response:
     guard = auth.require_login(request)
     if isinstance(guard, Response):
         return guard
     job = load_job(PROJECT_ROOT, job_id)
-    csv_text = task_diffs_to_csv(build_job_compare_payload(job))
+    csv_text = task_diffs_to_csv(build_job_compare_payload(job, baseline_id=base or None, adjusted_id=adjusted or None))
     return Response(
         "\ufeff" + csv_text,
         media_type="text/csv; charset=utf-8",
@@ -327,7 +327,12 @@ def compare_export_csv(request: Request, job_id: str) -> Response:
 
 
 @app.post("/jobs/{job_id}/run")
-def run_job(request: Request, job_id: str, run_mode: str = Form("standard")) -> Response:
+def run_job(
+    request: Request,
+    job_id: str,
+    run_mode: str = Form("standard"),
+    scenario_name: str = Form(""),
+) -> Response:
     guard = auth.require_login(request)
     if isinstance(guard, Response):
         return guard
@@ -347,6 +352,7 @@ def run_job(request: Request, job_id: str, run_mode: str = Form("standard")) -> 
         job.context,
         status="running",
         run_mode=run_mode,
+        run_scenario_name=scenario_name,
         preflight_warnings=preflight_warnings(job, run_mode),
         started_at=now_iso(),
         finished_at="",
@@ -536,7 +542,7 @@ async def adjust_job(request: Request, job_id: str) -> Response:
 
 
 @app.post("/jobs/{job_id}/recalculate")
-def recalculate_job(request: Request, job_id: str) -> Response:
+def recalculate_job(request: Request, job_id: str, scenario_name: str = Form("")) -> Response:
     guard = auth.require_login(request)
     if isinstance(guard, Response):
         return guard
@@ -544,6 +550,12 @@ def recalculate_job(request: Request, job_id: str) -> Response:
     store = ExcelBlackboardStore(job.context.blackboard_path)
     try:
         result = recalculate_blackboard_outputs(store, job.context.outputs_root, title=f"Web Job {job_id}")
+        scenario = save_scenario_snapshot(
+            store,
+            job.context.outputs_root,
+            name=scenario_name or f"重新计算 {now_iso().replace('T', ' ')[:19]}",
+            kind="adjusted",
+        )
     except Exception as exc:
         update_job_metadata(job.context, error_summary=str(exc))
         return RedirectResponse(f"/jobs/{job_id}/edit", status_code=303)
@@ -552,6 +564,7 @@ def recalculate_job(request: Request, job_id: str) -> Response:
         artifacts=list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path),
         last_recalculated_at=now_iso(),
         last_recalculate_counts=result,
+        last_scenario_snapshot=scenario,
         error_summary="",
     )
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
@@ -630,6 +643,12 @@ def _run_job_worker(
                 job.context.outputs_root,
                 title=f"Web Job {job_id}",
             )
+            scenario = save_scenario_snapshot(
+                store,
+                job.context.outputs_root,
+                name=str(job.metadata.get("run_scenario_name") or "") or f"重新计算 {now_iso().replace('T', ' ')[:19]}",
+                kind="adjusted",
+            )
             quality = assess_result_quality(store, counts, {}, run_mode="recalculate")
             update_job_metadata(
                 job.context,
@@ -638,6 +657,7 @@ def _run_job_worker(
                 error_summary="",
                 artifacts=list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path),
                 last_recalculate_counts=counts,
+                last_scenario_snapshot=scenario,
                 result_quality=quality,
                 result_summary={
                     "output_dir": str(job.context.outputs_root),
@@ -669,6 +689,12 @@ def _run_job_worker(
             restored_tables,
             run_mode=str(job.metadata.get("run_mode") or "standard"),
         )
+        scenario = save_scenario_snapshot(
+            store,
+            job.context.outputs_root,
+            name=str(job.metadata.get("run_scenario_name") or "") or f"运行结果 {now_iso().replace('T', ' ')[:19]}",
+            kind="adjusted",
+        )
         final_status = "failed" if quality.get("level") == "fallback_incomplete" else "succeeded"
         error_summary = quality.get("summary", "") if final_status == "failed" else ""
         update_job_metadata(
@@ -678,6 +704,7 @@ def _run_job_worker(
             error_summary=error_summary,
             artifacts=list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path),
             last_recalculate_counts=counts,
+            last_scenario_snapshot=scenario,
             restored_after_fallback=restored_tables,
             result_quality=quality,
             result_summary={
@@ -739,12 +766,22 @@ def fallback_result_detected(store: ExcelBlackboardStore) -> bool:
     return False
 
 
-def build_job_compare_payload(job: Any) -> dict[str, Any]:
+def build_job_compare_payload(
+    job: Any,
+    *,
+    baseline_id: str | None = None,
+    adjusted_id: str | None = None,
+) -> dict[str, Any]:
     store = ExcelBlackboardStore(job.context.blackboard_path)
     store.initialize()
     baseline = read_json(visual_export_path(job.context.outputs_root, "baseline_visual_data"))
-    current = build_visual_payload(store, baseline=baseline)
-    return build_compare_payload(current, baseline)
+    return build_job_compare_data(
+        store,
+        job.context.outputs_root,
+        baseline_payload=baseline,
+        baseline_id=baseline_id,
+        adjusted_id=adjusted_id,
+    )
 
 
 def assess_result_quality(

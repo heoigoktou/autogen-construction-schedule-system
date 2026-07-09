@@ -4,8 +4,162 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import re
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any
+
+from blackboard.excel_store import ExcelBlackboardStore
+
+from webapp.visual_data import build_visual_payload
+
+
+SCENARIO_DIRNAME = "scenarios"
+SCENARIO_MANIFEST = "manifest.json"
+CURRENT_SCENARIO_ID = "current"
+BASELINE_SCENARIO_ID = "baseline"
+
+
+def build_job_compare_data(
+    store: ExcelBlackboardStore,
+    outputs_root: Path,
+    *,
+    baseline_payload: dict[str, Any] | None = None,
+    baseline_id: str | None = None,
+    adjusted_id: str | None = None,
+) -> dict[str, Any]:
+    current_payload = build_visual_payload(store, baseline=baseline_payload)
+    scenarios = list_scenarios(outputs_root, current_payload=current_payload, baseline_payload=baseline_payload)
+    baseline_id = baseline_id or BASELINE_SCENARIO_ID
+    adjusted_id = adjusted_id or CURRENT_SCENARIO_ID
+    baseline = load_scenario_payload(outputs_root, baseline_id, current_payload, baseline_payload)
+    adjusted = load_scenario_payload(outputs_root, adjusted_id, current_payload, baseline_payload)
+    compare = build_compare_payload(adjusted, baseline)
+    compare["scenario_options"] = scenarios
+    compare["selected"] = {"baseline": baseline_id, "adjusted": adjusted_id}
+    return compare
+
+
+def save_scenario_snapshot(
+    store: ExcelBlackboardStore,
+    outputs_root: Path,
+    *,
+    name: str,
+    kind: str = "adjusted",
+) -> dict[str, Any]:
+    payload = build_visual_payload(store)
+    scenario_dir = outputs_root / SCENARIO_DIRNAME
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    created_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    scenario_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{slugify(name) or kind}"
+    filename = f"{scenario_id}.json"
+    write_json(scenario_dir / filename, payload)
+    summary = summarize_plan(list(payload.get("tasks") or []))
+    summary.pop("start_date", None)
+    summary.pop("finish_date", None)
+    item = {
+        "id": scenario_id,
+        "name": clean_scenario_name(name) or f"方案 {created_at[:19].replace('T', ' ')}",
+        "kind": kind,
+        "created_at": created_at,
+        "file": filename,
+        "task_count": summary["task_count"],
+        "duration_days": summary["duration_days"],
+        "start": summary["start"],
+        "finish": summary["finish"],
+    }
+    manifest = [entry for entry in read_manifest(outputs_root) if entry.get("id") != scenario_id]
+    manifest.append(item)
+    write_json(scenario_dir / SCENARIO_MANIFEST, manifest)
+    return item
+
+
+def list_scenarios(
+    outputs_root: Path,
+    *,
+    current_payload: dict[str, Any],
+    baseline_payload: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    options = []
+    if baseline_payload and baseline_payload.get("tasks"):
+        summary = summarize_plan(list(baseline_payload.get("tasks") or []))
+        options.append(
+            {
+                "id": BASELINE_SCENARIO_ID,
+                "name": "Baseline · 基准进度",
+                "kind": "baseline",
+                "created_at": "",
+                "task_count": summary["task_count"],
+                "duration_days": summary["duration_days"],
+                "start": summary["start"],
+                "finish": summary["finish"],
+            }
+        )
+    summary = summarize_plan(list(current_payload.get("tasks") or []))
+    options.append(
+        {
+            "id": CURRENT_SCENARIO_ID,
+            "name": "Current · 最新计算结果",
+            "kind": "current",
+            "created_at": str(current_payload.get("generated_at") or ""),
+            "task_count": summary["task_count"],
+            "duration_days": summary["duration_days"],
+            "start": summary["start"],
+            "finish": summary["finish"],
+        }
+    )
+    options.extend(read_manifest(outputs_root))
+    return options
+
+
+def load_scenario_payload(
+    outputs_root: Path,
+    scenario_id: str,
+    current_payload: dict[str, Any],
+    baseline_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if scenario_id == CURRENT_SCENARIO_ID:
+        return current_payload
+    if scenario_id == BASELINE_SCENARIO_ID and baseline_payload:
+        return baseline_payload
+    for item in read_manifest(outputs_root):
+        if item.get("id") != scenario_id:
+            continue
+        path = outputs_root / SCENARIO_DIRNAME / str(item.get("file") or "")
+        if path.exists() and path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                break
+            return data if isinstance(data, dict) else {}
+    return current_payload
+
+
+def read_manifest(outputs_root: Path) -> list[dict[str, Any]]:
+    path = outputs_root / SCENARIO_DIRNAME / SCENARIO_MANIFEST
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return []
+    return data if isinstance(data, list) else []
+
+
+def write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+
+
+def clean_scenario_name(value: str) -> str:
+    return " ".join(str(value or "").split())[:80]
+
+
+def slugify(value: str) -> str:
+    text = clean_scenario_name(value).lower()
+    text = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff]+", "-", text).strip("-")
+    return text[:40]
 
 
 def build_compare_payload(current: dict[str, Any], baseline: dict[str, Any] | None) -> dict[str, Any]:
