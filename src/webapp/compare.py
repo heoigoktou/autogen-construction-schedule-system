@@ -58,10 +58,19 @@ def build_compare_payload(current: dict[str, Any], baseline: dict[str, Any] | No
 
     baseline_summary = summarize_plan(baseline_tasks)
     adjusted_summary = summarize_plan(current_tasks)
+    baseline_finish_date = baseline_summary.pop("finish_date")
+    adjusted_finish_date = adjusted_summary.pop("finish_date")
+    baseline_summary.pop("start_date")
+    adjusted_summary.pop("start_date")
     baseline_resource = summarize_resource_conflicts(baseline)
     adjusted_resource = summarize_resource_conflicts(current)
     resource_diffs = build_resource_diffs(baseline, current)
     milestone_diffs = build_milestone_diffs(baseline.get("milestones") or [], current.get("milestones") or [])
+    for diff in task_diffs:
+        diff.pop("base_start_date", None)
+        diff.pop("base_finish_date", None)
+        diff.pop("adjusted_start_date", None)
+        diff.pop("adjusted_finish_date", None)
 
     return {
         "schema_version": 1,
@@ -69,7 +78,7 @@ def build_compare_payload(current: dict[str, Any], baseline: dict[str, Any] | No
         "adjusted": adjusted_summary,
         "metrics": {
             "duration_delta_days": adjusted_summary["duration_days"] - baseline_summary["duration_days"],
-            "finish_delta_days": date_delta(adjusted_summary["finish_date"], baseline_summary["finish_date"]),
+            "finish_delta_days": date_delta(adjusted_finish_date, baseline_finish_date),
             "critical_added_count": len(critical_added),
             "delayed_task_count": len(delayed_tasks),
             "resource_conflict_delta": adjusted_resource["conflict_count"] - baseline_resource["conflict_count"],
