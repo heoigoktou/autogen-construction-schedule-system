@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from openpyxl import Workbook
 
 from blackboard.excel_store import ExcelBlackboardStore
 from tests.helpers import (
@@ -122,6 +123,32 @@ def test_create_job_writes_metadata_and_blackboard(tmp_path: Path) -> None:
     assert job.context.runtime_log.parent.exists()
 
 
+def test_create_job_imports_standard_workbook_tables(tmp_path: Path) -> None:
+    workbook = Workbook()
+    default = workbook.active
+    workbook.remove(default)
+    for sheet_name, rows in {
+        "wbs_tasks_final": minimal_wbs_rows(),
+        "resource_plan_final": minimal_resource_rows(),
+    }.items():
+        sheet = workbook.create_sheet(sheet_name)
+        headers = list(rows[0].keys())
+        sheet.append(headers)
+        for row in rows:
+            sheet.append([row.get(header) for header in headers])
+    payload = BytesIO()
+    workbook.save(payload)
+    payload.seek(0)
+
+    upload = SimpleNamespace(filename="standard.xlsx", file=payload)
+    job = copy_uploaded_files_to_job(tmp_path, [upload], max_upload_bytes=100000)
+
+    store = ExcelBlackboardStore(job.context.blackboard_path)
+    assert len(store.read_rows("wbs_tasks_final")) == len(minimal_wbs_rows())
+    assert len(store.read_rows("resource_plan_final")) == len(minimal_resource_rows())
+    assert job.metadata["standard_table_import"]["imported"]["wbs_tasks_final"] == len(minimal_wbs_rows())
+
+
 def test_preprocess_merges_existing_parameter_checklist(tmp_path: Path) -> None:
     input_dir = tmp_path / "uploads"
     input_dir.mkdir()
@@ -198,6 +225,37 @@ def test_fallback_restores_preserved_manual_tables(tmp_path: Path) -> None:
     assert len(store.read_rows("resource_plan_final")) == len(minimal_resource_rows())
 
 
+def test_fallback_without_preserved_tables_is_marked_incomplete(tmp_path: Path) -> None:
+    from webapp import app as webapp_app
+
+    store = ExcelBlackboardStore(tmp_path / "blackboard.xlsx")
+    store.initialize()
+    fallback_wbs = [
+        {
+            **minimal_wbs_rows()[0],
+            "task_id": "TASK-FALLBACK",
+            "source": "rules_fallback+source_context",
+            "owner_agent": "fallback_scheduler",
+            "note": "Fallback placeholder.",
+        }
+    ]
+    event = {**minimal_event_rows()[0], "event_type": "runtime_fallback", "created_by": "fallback_scheduler"}
+    store.replace_rows("wbs_tasks_final", fallback_wbs)
+    store.replace_rows("event_log", [event])
+
+    quality = webapp_app.assess_result_quality(store, {"schedule_initial": 0}, {}, run_mode="standard")
+
+    assert quality["level"] == "fallback_incomplete"
+    assert quality["fallback_detected"] is True
+
+
+def test_default_run_mode_prefers_recalculate_when_tables_exist(tmp_path: Path) -> None:
+    from webapp import app as webapp_app
+
+    assert webapp_app.default_run_mode({"wbs_tasks_final": 1, "resource_plan_final": 1}, {}) == "recalculate"
+    assert webapp_app.default_run_mode({"wbs_tasks_final": 0, "resource_plan_final": 0}, {"run_mode": "light"}) == "light"
+
+
 def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from webapp import app as webapp_app
 
@@ -228,3 +286,44 @@ def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, mon
     assert calls[:2] == ["preprocess", "workflow"]
     assert reloaded.metadata["preprocess_summary"]["readiness_score"] == 95
     assert reloaded.metadata["status"] == "succeeded"
+
+
+def test_recalculate_worker_skips_model_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from webapp import app as webapp_app
+    from webapp.jobs import update_job_metadata
+
+    upload = SimpleNamespace(filename="case.md", file=BytesIO(b"# case"))
+    job = copy_uploaded_files_to_job(tmp_path, [upload], max_upload_bytes=100)
+    store = ExcelBlackboardStore(job.context.blackboard_path)
+    store.replace_rows("wbs_tasks_final", minimal_wbs_rows())
+    store.replace_rows("resource_plan_final", minimal_resource_rows())
+    update_job_metadata(job.context, status="running", run_mode="recalculate")
+    calls: list[str] = []
+
+    monkeypatch.setattr(webapp_app, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        webapp_app,
+        "preprocess_job_documents",
+        lambda *args, **kwargs: SimpleNamespace(package={"summary": {"readiness_score": 95}}),
+    )
+    monkeypatch.setattr(
+        webapp_app,
+        "run_real_case_workflow",
+        lambda **kwargs: pytest.fail("model workflow should not run in recalculate mode"),
+    )
+
+    def fake_recalculate(*args: object, **kwargs: object) -> dict[str, int]:
+        calls.append("recalculate")
+        return {"schedule_initial": 3}
+
+    monkeypatch.setattr(webapp_app, "recalculate_blackboard_outputs", fake_recalculate)
+    monkeypatch.setattr(webapp_app, "list_existing_artifacts", lambda *args, **kwargs: [])
+
+    lock = threading.Lock()
+    lock.acquire()
+    webapp_app._run_job_worker(job.job_id, lock, threading.Event(), {})
+
+    reloaded = load_job(tmp_path, job.job_id)
+    assert calls == ["recalculate"]
+    assert reloaded.metadata["status"] == "succeeded"
+    assert reloaded.metadata["result_quality"]["level"] == "recalculated"

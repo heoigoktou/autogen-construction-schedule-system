@@ -13,6 +13,7 @@ from typing import Any
 
 from blackboard.excel_store import ExcelBlackboardStore
 from tools.case_context import CaseContext, ensure_case_directories, resolve_web_case_context
+from webapp.importers import import_standard_tables_from_uploads
 
 CN_TZ = timezone(timedelta(hours=8))
 ALLOWED_EXTENSIONS = {".txt", ".md", ".csv", ".xlsx", ".docx", ".pdf"}
@@ -55,6 +56,10 @@ def create_job(project_root: Path, *, original_files: list[dict[str, Any]]) -> W
     }
     write_job_metadata(context, metadata)
     ExcelBlackboardStore(context.blackboard_path).initialize()
+    import_summary = import_standard_tables_from_uploads(context.input_docs_dir, context.blackboard_path)
+    if import_summary.get("imported"):
+        metadata["standard_table_import"] = import_summary
+        write_job_metadata(context, metadata)
     return WebJob(job_id, context.input_docs_dir.parent, context, metadata)
 
 
@@ -245,6 +250,10 @@ def copy_uploaded_files_to_job(
     }
     write_job_metadata(context, metadata)
     ExcelBlackboardStore(context.blackboard_path).initialize()
+    import_summary = import_standard_tables_from_uploads(context.input_docs_dir, context.blackboard_path)
+    if import_summary.get("imported"):
+        metadata["standard_table_import"] = import_summary
+        write_job_metadata(context, metadata)
     return WebJob(job_id, context.input_docs_dir.parent, context, metadata)
 
 

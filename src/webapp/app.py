@@ -61,6 +61,9 @@ PRESERVE_ON_FALLBACK_SHEETS = (
     "wbs_tasks_final",
     "resource_plan_final",
 )
+RUN_MODES = {"standard", "light", "recalculate"}
+MIN_REVIEW_WBS_ROWS = 40
+MIN_REVIEW_RESOURCE_ROWS = 30
 
 
 @asynccontextmanager
@@ -168,6 +171,9 @@ def job_detail(request: Request, job_id: str) -> Response:
     job = load_job(PROJECT_ROOT, job_id)
     artifacts = list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path)
     preprocess_package = load_preprocess_package(job.context.outputs_root)
+    store = ExcelBlackboardStore(job.context.blackboard_path)
+    store.initialize()
+    table_counts = job_table_counts(store)
     return templates.TemplateResponse(
         request,
         "job_detail.html",
@@ -176,6 +182,8 @@ def job_detail(request: Request, job_id: str) -> Response:
             "artifacts": artifacts,
             "artifact_groups": group_artifacts(artifacts),
             "preprocess": preprocess_package,
+            "table_counts": table_counts,
+            "default_run_mode": default_run_mode(table_counts, job.metadata),
         },
     )
 
@@ -286,7 +294,7 @@ def run_job(request: Request, job_id: str, run_mode: str = Form("standard")) -> 
     if isinstance(guard, Response):
         return guard
     job = load_job(PROJECT_ROOT, job_id)
-    run_mode = run_mode if run_mode in {"standard", "light"} else "standard"
+    run_mode = run_mode if run_mode in RUN_MODES else "standard"
     if job.metadata.get("status") in {"running", "cancelling"}:
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
     if not request.app.state.run_lock.acquire(blocking=False):
@@ -578,6 +586,28 @@ def _run_job_worker(
         store = ExcelBlackboardStore(job.context.blackboard_path)
         store.initialize()
         preserved_tables = snapshot_preserved_tables(store)
+        if str(job.metadata.get("run_mode") or "") == "recalculate":
+            counts = recalculate_blackboard_outputs(
+                store,
+                job.context.outputs_root,
+                title=f"Web Job {job_id}",
+            )
+            quality = assess_result_quality(store, counts, {}, run_mode="recalculate")
+            update_job_metadata(
+                job.context,
+                status="succeeded",
+                finished_at=now_iso(),
+                error_summary="",
+                artifacts=list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path),
+                last_recalculate_counts=counts,
+                result_quality=quality,
+                result_summary={
+                    "output_dir": str(job.context.outputs_root),
+                    "blackboard": str(job.context.blackboard_path),
+                    "mode": "recalculate",
+                },
+            )
+            return
         result = run_real_case_workflow(
             context=job.context,
             project_root=PROJECT_ROOT,
@@ -595,14 +625,23 @@ def _run_job_worker(
         )
         if cancel_event.is_set():
             raise RuntimeError("Job cancelled by user.")
+        quality = assess_result_quality(
+            store,
+            counts,
+            restored_tables,
+            run_mode=str(job.metadata.get("run_mode") or "standard"),
+        )
+        final_status = "failed" if quality.get("level") == "fallback_incomplete" else "succeeded"
+        error_summary = quality.get("summary", "") if final_status == "failed" else ""
         update_job_metadata(
             job.context,
-            status="succeeded",
+            status=final_status,
             finished_at=now_iso(),
-            error_summary="",
+            error_summary=error_summary,
             artifacts=list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path),
             last_recalculate_counts=counts,
             restored_after_fallback=restored_tables,
+            result_quality=quality,
             result_summary={
                 "output_dir": str(result["output_dir"]),
                 "blackboard": str(result["blackboard"]),
@@ -662,6 +701,76 @@ def fallback_result_detected(store: ExcelBlackboardStore) -> bool:
     return False
 
 
+def assess_result_quality(
+    store: ExcelBlackboardStore,
+    counts: dict[str, Any],
+    restored_tables: dict[str, int],
+    *,
+    run_mode: str,
+) -> dict[str, Any]:
+    table_counts = job_table_counts(store)
+    fallback = fallback_result_detected(store)
+    issues: list[str] = []
+    if table_counts["wbs_tasks_final"] == 0:
+        issues.append("WBS is empty.")
+    elif table_counts["wbs_tasks_final"] < MIN_REVIEW_WBS_ROWS:
+        issues.append(f"WBS has only {table_counts['wbs_tasks_final']} rows; review before formal use.")
+    if table_counts["resource_plan_final"] == 0:
+        issues.append("Resource plan is empty.")
+    elif table_counts["resource_plan_final"] < MIN_REVIEW_RESOURCE_ROWS:
+        issues.append(
+            f"Resource plan has only {table_counts['resource_plan_final']} rows; review before formal use."
+        )
+    if int(counts.get("schedule_initial") or table_counts["schedule_initial"] or 0) == 0:
+        issues.append("Schedule output is empty.")
+    if fallback and restored_tables:
+        level = "restored_after_fallback"
+        summary = "AI generation fell back, but preserved manual WBS/resources were restored and recalculated."
+    elif fallback:
+        level = "fallback_incomplete"
+        summary = "AI generation timed out and produced fallback results. Review or provide WBS/resources before recalculating."
+    elif run_mode == "recalculate":
+        level = "recalculated"
+        summary = "Existing WBS/resources were recalculated without model calls."
+    elif issues:
+        level = "needs_review"
+        summary = "Results were generated, but quality checks found review items."
+    else:
+        level = "formal"
+        summary = "Results passed basic quality checks."
+    return {
+        "level": level,
+        "summary": summary,
+        "issues": issues,
+        "table_counts": table_counts,
+        "fallback_detected": fallback,
+        "restored_tables": restored_tables,
+    }
+
+
+def job_table_counts(store: ExcelBlackboardStore) -> dict[str, int]:
+    return {
+        sheet_name: len(store.read_rows(sheet_name))
+        for sheet_name in (
+            "parameter_checklist",
+            "project_parameters",
+            "wbs_tasks_final",
+            "resource_plan_final",
+            "schedule_initial",
+            "cpm_analysis",
+            "network_edges",
+            "resource_load_daily",
+        )
+    }
+
+
+def default_run_mode(table_counts: dict[str, int], metadata: dict[str, Any]) -> str:
+    if table_counts.get("wbs_tasks_final", 0) > 0 and table_counts.get("resource_plan_final", 0) > 0:
+        return "recalculate"
+    mode = str(metadata.get("run_mode") or "standard")
+    return mode if mode in {"standard", "light"} else "standard"
+
+
 def tail_file(path: Path, max_bytes: int = 200000) -> str:
     if not path.exists():
         return ""
@@ -689,7 +798,15 @@ def preflight_warnings(job: Any, run_mode: str) -> list[str]:
             f"资料预处理发现 {preprocess_summary.get('missing_required_count')} 个必需参数未识别，"
             "建议补充或确认后再正式运行。"
         )
-    if run_mode == "standard":
+    store = ExcelBlackboardStore(job.context.blackboard_path)
+    store.initialize()
+    table_counts = job_table_counts(store)
+    if run_mode == "recalculate":
+        if table_counts["wbs_tasks_final"] == 0 or table_counts["resource_plan_final"] == 0:
+            warnings.append("重新计算需要已有 WBS 和资源计划；当前表为空时请先编辑或使用 AI 生成。")
+        else:
+            warnings.append("将基于现有 WBS 和资源计划重新计算，不调用大模型，不会覆盖人工补齐表。")
+    elif run_mode == "standard":
         warnings.append("标准模式会进行更完整的多 Agent 协作，质量更高但更容易触发模型限流。")
     else:
         warnings.append("轻量模式会减少模型上下文、轮数和工具调用，适合演示、快速测试和额度紧张时使用。")

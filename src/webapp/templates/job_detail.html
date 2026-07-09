@@ -50,6 +50,19 @@
   {% endfor %}
 </div>
 {% endif %}
+{% if job.metadata.result_quality %}
+<div class="notice quality quality-{{ job.metadata.result_quality.level }}">
+  <strong>结果质量：{{ job.metadata.result_quality.level }}</strong>
+  <div>{{ job.metadata.result_quality.summary }}</div>
+  {% if job.metadata.result_quality.issues %}
+  <ul>
+    {% for issue in job.metadata.result_quality.issues %}
+    <li>{{ issue }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endif %}
 
 <section class="panel-section preprocess-overview">
   <div class="section-head">
@@ -92,14 +105,25 @@
       </div>
     </div>
     <form method="post" action="/jobs/{{ job.job_id }}/run" class="run-form run-card">
+      <div class="preprocess-stats">
+        <div><span>WBS</span><strong>{{ table_counts.wbs_tasks_final }}</strong></div>
+        <div><span>资源</span><strong>{{ table_counts.resource_plan_final }}</strong></div>
+        <div><span>进度</span><strong>{{ table_counts.schedule_initial }}</strong></div>
+        <div><span>CPM</span><strong>{{ table_counts.cpm_analysis }}</strong></div>
+      </div>
       <div class="run-mode-grid" role="radiogroup" aria-label="运行模式">
         <label class="run-mode-card">
-          <input type="radio" name="run_mode" value="light" {% if job.metadata.run_mode == "light" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
+          <input type="radio" name="run_mode" value="recalculate" {% if default_run_mode == "recalculate" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
+          <strong>重新计算已有方案</strong>
+          <span>已有 WBS 和资源时推荐使用；不调用大模型，只重新生成进度、CPM、资源负载和图表。</span>
+        </label>
+        <label class="run-mode-card">
+          <input type="radio" name="run_mode" value="light" {% if default_run_mode == "light" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
           <strong>轻量模式</strong>
           <span>跳过重模型步骤，适合快速试跑、额度紧张或先检查资料结构。</span>
         </label>
         <label class="run-mode-card">
-          <input type="radio" name="run_mode" value="standard" {% if job.metadata.run_mode != "light" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
+          <input type="radio" name="run_mode" value="standard" {% if default_run_mode == "standard" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
           <strong>标准模式</strong>
           <span>执行完整多智能体流程，生成正式排程、图表和报告。</span>
         </label>
