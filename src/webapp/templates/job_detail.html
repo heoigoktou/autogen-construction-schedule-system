@@ -165,6 +165,7 @@
 </section>
 
 <section class="panel-section">
+  {% set download_version = job.metadata.last_recalculated_at or job.metadata.finished_at or job.metadata.created_at %}
   <div class="section-head">
     <div>
       <h2>任务信息</h2>
@@ -190,7 +191,7 @@
       <p class="muted">按用途分组下载 Excel、JSON、图表和报告。</p>
     </div>
     {% if artifacts|length > 1 %}
-    <a class="button secondary" href="/jobs/{{ job.job_id }}/download/all">下载全部</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/download/all?v={{ download_version|urlencode }}">下载全部</a>
     {% endif %}
   </div>
   {% if artifact_groups %}
@@ -200,7 +201,7 @@
       <h3>{{ group.title }}</h3>
       <div class="artifact-list">
         {% for artifact in group.artifacts %}
-        <a class="artifact-link" href="/jobs/{{ job.job_id }}/download/{{ artifact.key }}">{{ artifact.name }}</a>
+        <a class="artifact-link" href="/jobs/{{ job.job_id }}/download/{{ artifact.key }}?v={{ download_version|urlencode }}">{{ artifact.name }}</a>
         {% endfor %}
       </div>
     </div>

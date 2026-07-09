@@ -452,7 +452,15 @@ def download_artifact(request: Request, job_id: str, artifact: str) -> Response:
         export_visual_json_artifacts(store, job.context.outputs_root)
     if not path.exists() or not path.is_file():
         return HTMLResponse("文件不存在。", status_code=404)
-    return FileResponse(path, filename=path.name)
+    return FileResponse(
+        path,
+        filename=path.name,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/jobs/{job_id}/edit", response_class=HTMLResponse)
