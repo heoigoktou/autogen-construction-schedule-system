@@ -14,7 +14,7 @@ from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
 from webapp.editors import save_resource_rows, save_wbs_rows
 from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
-from webapp.preprocess import preprocess_job_documents
+from webapp.preprocess import build_readiness, preprocess_job_documents
 from webapp.services import artifact_path, list_existing_artifacts, recalculate_blackboard_outputs
 
 
@@ -146,6 +146,18 @@ def test_preprocess_merges_existing_parameter_checklist(tmp_path: Path) -> None:
     assert "P-016" not in missing_ids
     reloaded = ExcelBlackboardStore(blackboard_path)
     assert len(reloaded.read_rows("parameter_checklist")) >= len(checklist)
+
+
+def test_readiness_rewards_complete_required_parameters() -> None:
+    readiness = build_readiness(
+        documents=[SimpleNamespace(text="readable source")],
+        recognized_parameters=[{"parameter_id": f"P-{index:03d}"} for index in range(8)],
+        missing_required=[],
+        resource_candidates=[{"name_hint": f"resource-{index}", "quantity_hint": "1"} for index in range(8)],
+        schedule_candidates=[{"type": "milestone"} for _ in range(10)],
+    )
+
+    assert readiness["score"] == 95
 
 
 def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

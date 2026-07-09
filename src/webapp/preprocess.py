@@ -524,6 +524,8 @@ def build_readiness(
     score += min(30, len(recognized_parameters) * 4)
     score += min(20, len(schedule_candidates) * 2)
     score += min(15, len(resource_candidates) * 2)
+    if not missing_required and recognized_parameters:
+        score += 10
     score -= min(35, len(missing_required) * 4)
     score = max(0, min(100, score))
     if score >= 75:
