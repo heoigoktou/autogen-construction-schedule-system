@@ -838,7 +838,9 @@ def _configure_matplotlib() -> None:
     preferred_fonts = (
         "Microsoft YaHei",
         "SimHei",
+        "WenQuanYi Zen Hei",
         "Noto Sans CJK SC",
+        "Noto Sans CJK JP",
         "Source Han Sans SC",
         "Arial Unicode MS",
     )
