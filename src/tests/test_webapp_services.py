@@ -8,7 +8,12 @@ from types import SimpleNamespace
 import pytest
 
 from blackboard.excel_store import ExcelBlackboardStore
-from tests.helpers import minimal_parameter_checklist, minimal_resource_rows, minimal_wbs_rows
+from tests.helpers import (
+    minimal_event_rows,
+    minimal_parameter_checklist,
+    minimal_resource_rows,
+    minimal_wbs_rows,
+)
 from tools.case_context import resolve_web_case_context
 from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
@@ -158,6 +163,39 @@ def test_readiness_rewards_complete_required_parameters() -> None:
     )
 
     assert readiness["score"] == 95
+
+
+def test_fallback_restores_preserved_manual_tables(tmp_path: Path) -> None:
+    from webapp import app as webapp_app
+
+    store = ExcelBlackboardStore(tmp_path / "blackboard.xlsx")
+    store.initialize()
+    store.replace_rows("parameter_checklist", minimal_parameter_checklist())
+    store.replace_rows("project_parameters", build_project_parameter_rows(minimal_parameter_checklist()))
+    store.replace_rows("wbs_tasks_final", minimal_wbs_rows())
+    store.replace_rows("resource_plan_final", minimal_resource_rows())
+    preserved = webapp_app.snapshot_preserved_tables(store)
+
+    fallback_wbs = [
+        {
+            **minimal_wbs_rows()[0],
+            "task_id": "TASK-FALLBACK",
+            "source": "rules_fallback+source_context",
+            "owner_agent": "fallback_scheduler",
+            "note": "Fallback placeholder.",
+        }
+    ]
+    event = {**minimal_event_rows()[0], "event_type": "runtime_fallback", "created_by": "fallback_scheduler"}
+    store.replace_rows("wbs_tasks_final", fallback_wbs)
+    store.replace_rows("resource_plan_final", [])
+    store.replace_rows("event_log", [event])
+
+    restored = webapp_app.restore_preserved_tables_after_fallback(store, preserved)
+
+    assert restored["wbs_tasks_final"] == len(minimal_wbs_rows())
+    assert restored["resource_plan_final"] == len(minimal_resource_rows())
+    assert len(store.read_rows("wbs_tasks_final")) == len(minimal_wbs_rows())
+    assert len(store.read_rows("resource_plan_final")) == len(minimal_resource_rows())
 
 
 def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

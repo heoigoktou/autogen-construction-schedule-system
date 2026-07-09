@@ -55,6 +55,12 @@ templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 templates.env.globals["current_user"] = auth.current_user
 templates.env.filters["date_only"] = lambda value: date_only(value)
 LOGGER = logging.getLogger(__name__)
+PRESERVE_ON_FALLBACK_SHEETS = (
+    "parameter_checklist",
+    "project_parameters",
+    "wbs_tasks_final",
+    "resource_plan_final",
+)
 
 
 @asynccontextmanager
@@ -569,6 +575,9 @@ def _run_job_worker(
         if cancel_event.is_set():
             raise RuntimeError("Job cancelled by user.")
         job = load_job(PROJECT_ROOT, job_id)
+        store = ExcelBlackboardStore(job.context.blackboard_path)
+        store.initialize()
+        preserved_tables = snapshot_preserved_tables(store)
         result = run_real_case_workflow(
             context=job.context,
             project_root=PROJECT_ROOT,
@@ -578,8 +587,9 @@ def _run_job_worker(
         )
         if cancel_event.is_set():
             raise RuntimeError("Job cancelled by user.")
+        restored_tables = restore_preserved_tables_after_fallback(store, preserved_tables)
         counts = recalculate_blackboard_outputs(
-            ExcelBlackboardStore(job.context.blackboard_path),
+            store,
             job.context.outputs_root,
             title=f"Web Job {job_id}",
         )
@@ -592,6 +602,7 @@ def _run_job_worker(
             error_summary="",
             artifacts=list_existing_artifacts(job.context.outputs_root, job.context.blackboard_path),
             last_recalculate_counts=counts,
+            restored_after_fallback=restored_tables,
             result_summary={
                 "output_dir": str(result["output_dir"]),
                 "blackboard": str(result["blackboard"]),
@@ -613,6 +624,42 @@ def _run_job_worker(
     finally:
         running_jobs.pop(job_id, None)
         lock.release()
+
+
+def snapshot_preserved_tables(store: ExcelBlackboardStore) -> dict[str, list[dict[str, Any]]]:
+    return {sheet_name: store.read_rows(sheet_name) for sheet_name in PRESERVE_ON_FALLBACK_SHEETS}
+
+
+def restore_preserved_tables_after_fallback(
+    store: ExcelBlackboardStore,
+    preserved_tables: dict[str, list[dict[str, Any]]],
+) -> dict[str, int]:
+    if not fallback_result_detected(store):
+        return {}
+    restored: dict[str, int] = {}
+    for sheet_name, preserved_rows in preserved_tables.items():
+        if not preserved_rows:
+            continue
+        current_rows = store.read_rows(sheet_name)
+        if len(current_rows) >= len(preserved_rows):
+            continue
+        store.replace_rows(sheet_name, preserved_rows)
+        restored[sheet_name] = len(preserved_rows)
+    return restored
+
+
+def fallback_result_detected(store: ExcelBlackboardStore) -> bool:
+    for row in store.read_rows("event_log"):
+        if str(row.get("event_type") or "") == "runtime_fallback":
+            return True
+    for sheet_name in ("wbs_tasks_final", "resource_plan_final"):
+        for row in store.read_rows(sheet_name):
+            source = str(row.get("source") or "")
+            owner = str(row.get("owner_agent") or "")
+            note = str(row.get("note") or "")
+            if owner == "fallback_scheduler" or "rules_fallback" in source or "Fallback" in note:
+                return True
+    return False
 
 
 def tail_file(path: Path, max_bytes: int = 200000) -> str:
