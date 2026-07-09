@@ -187,7 +187,7 @@ def read_exported_schedule_tables(schedule_dir: str | Path) -> dict[str, list[di
     if not rows["resource_load_daily"]:
         resource_rows = _read_xlsx_rows(directory / "资源需求表.xlsx")
         if resource_rows:
-            rows["resource_load_daily"] = build_resource_load(resource_rows)
+            rows["resource_load_daily"] = build_resource_load(resource_rows, rows["schedule_initial"])
     return rows
 
 
@@ -238,7 +238,7 @@ def build_demo_visualization_rows() -> dict[str, list[dict[str, Any]]]:
         "schedule_initial": schedule_rows,
         "cpm_analysis": cpm_rows,
         "network_edges": edge_rows,
-        "resource_load_daily": build_resource_load(resource_rows),
+        "resource_load_daily": build_resource_load(resource_rows, schedule_rows),
     }
 
 

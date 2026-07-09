@@ -74,7 +74,7 @@ def recalculate_blackboard_outputs(
         resource_rows,
         start_date=start_date,
     )
-    resource_load_rows = build_resource_load(resource_rows)
+    resource_load_rows = build_resource_load(resource_rows, schedule_rows)
     resource_resolution_rows = build_resource_resolution(resource_load_rows)
     milestone_rows = build_milestone_checks(
         schedule_rows,

@@ -120,7 +120,7 @@ def write_agentchat_output(
             start_index=len(normalized.get("parameter_audit", [])) + 1,
         ),
     ]
-    resource_load_rows = build_resource_load(normalized["resource_plan_final"])
+    resource_load_rows = build_resource_load(normalized["resource_plan_final"], schedule_rows)
     resource_resolution_rows = build_resource_resolution(resource_load_rows)
     constraint_rows = check_constraints(
         normalized["wbs_tasks_final"],
@@ -241,7 +241,7 @@ def force_write_agentchat_output(
             milestone_rows = []
 
     try:
-        resource_load_rows = build_resource_load(normalized["resource_plan_final"])
+        resource_load_rows = build_resource_load(normalized["resource_plan_final"], schedule_rows)
         resource_resolution_rows = build_resource_resolution(resource_load_rows)
     except Exception as exc:
         derived_errors.append(f"resource aggregation failed: {exc}")
