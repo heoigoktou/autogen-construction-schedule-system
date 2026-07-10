@@ -477,9 +477,6 @@ def draw_machine_panel(img, draw, data, start, end):
         draw.text((x0 + 14, y + 18), f"{int(qty)}台", font=F["badge"], fill=PANEL if qty >= 4 else INK)
         draw.text((x1 + 10, y + 18), parse_date(machine["end"]).strftime("%m.%d"), font=F["tiny"], fill=MUTED)
 
-    draw.text((px + 68, py + ph - 100), "接口字段：name/spec/quantity/start/end/color，可由设备计划表自动映射。", font=F["small"], fill=MUTED)
-
-
 def draw_donut(draw, data):
     px, py, pw, ph = 2250, 1244, 1258, 760
     rounded(draw, (px, py, px + pw, py + ph), 30, PANEL, BORDER, 2)
