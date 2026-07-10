@@ -80,8 +80,8 @@
       </div>
       <div class="resource-atlas-controls" id="resourceAtlasControls" aria-label="资源负荷图谱视图">
         <button type="button" class="tool-chip active" data-atlas-mode="demand">需求堆叠</button>
-        <button type="button" class="tool-chip" data-atlas-mode="rate">负荷率</button>
-        <button type="button" class="tool-chip" data-atlas-mode="conflict">冲突点</button>
+        <button type="button" class="tool-chip" data-atlas-mode="rate">机械占用</button>
+        <button type="button" class="tool-chip" data-atlas-mode="conflict">劳动力结构</button>
       </div>
     </div>
     <div id="resourceAtlasMetrics" class="resource-atlas-metrics"></div>
@@ -420,66 +420,54 @@
     const peakValue = peakIndex >= 0 ? model.totals[peakIndex] : 0;
     const conflictCount = model.conflictPoints.length;
     const totalDemand = model.totals.reduce((sum, value) => sum + Number(value || 0), 0);
+
+    if (resourceAtlasMode === "rate") {
+      renderMachineAtlas(selectedResource);
+      return;
+    }
+    if (resourceAtlasMode === "conflict") {
+      renderLaborStructureAtlas(model, peakDate, peakValue, totalDemand);
+      return;
+    }
+
     metrics.innerHTML = [
       atlasMetric("展示资源", model.items.length),
       atlasMetric("峰值日期", peakDate),
       atlasMetric("峰值需求", `${roundNumber(peakValue)}人`),
       atlasMetric("峰值配置", `${roundNumber(model.capacity)}人`),
       atlasMetric("冲突记录", conflictCount),
-      atlasMetric("累计人日", roundNumber(totalDemand)),
+      atlasMetric("累计工日", roundNumber(totalDemand)),
     ].join("");
 
     const series = [];
-    if (resourceAtlasMode === "demand") {
-      model.items.forEach((item, index) => {
-        series.push({
-          name: item.name,
-          type: "line",
-          stack: "demand",
-          smooth: true,
-          showSymbol: false,
-          areaStyle: { opacity: 0.58 },
-          lineStyle: { width: 2 },
-          itemStyle: { color: item.color },
-          emphasis: { focus: "series" },
-          data: item.values.map(value => Number(value.toFixed(2))),
-          markLine: index === 0 && model.capacity > 0 ? {
-            symbol: "none",
-            silent: true,
-            lineStyle: { color: "#dc2626", type: "dashed", width: 2 },
-            label: { formatter: `峰值配置 ${roundNumber(model.capacity)}人`, color: "#dc2626" },
-            data: [{ yAxis: model.capacity }],
-          } : undefined,
-        });
-      });
-    } else if (resourceAtlasMode === "rate") {
-      model.items.forEach(item => {
-        series.push({
-          name: item.name,
-          type: "line",
-          smooth: true,
-          showSymbol: false,
-          lineStyle: { width: 3 },
-          itemStyle: { color: item.color },
-          data: item.values.map(value => item.peak ? Number(((value / item.peak) * 100).toFixed(1)) : 0),
-        });
-      });
-    } else {
+    model.items.forEach((item, index) => {
       series.push({
-        name: "冲突点",
-        type: "scatter",
-        symbolSize: value => Math.max(10, Math.min(28, Math.sqrt(Number(value[1] || 0)) * 2.6)),
-        itemStyle: { color: "#dc2626" },
-        data: model.conflictPoints,
+        name: item.name,
+        type: "line",
+        stack: "demand",
+        smooth: true,
+        showSymbol: false,
+        areaStyle: { opacity: 0.58 },
+        lineStyle: { width: 2 },
+        itemStyle: { color: item.color },
+        emphasis: { focus: "series" },
+        data: item.values.map(value => Number(value.toFixed(2))),
+        markLine: index === 0 && model.capacity > 0 ? {
+          symbol: "none",
+          silent: true,
+          lineStyle: { color: "#dc2626", type: "dashed", width: 2 },
+          label: { formatter: `峰值配置 ${roundNumber(model.capacity)}人`, color: "#dc2626" },
+          data: [{ yAxis: model.capacity }],
+        } : undefined,
       });
-    }
+    });
 
-    const yName = resourceAtlasMode === "rate" ? "负荷率 %" : "人数";
+    const yName = "人数";
     const titleText = selectedResource ? `当前聚焦：${selectedResource}` : `当前显示：与下载图一致的劳动力 Top ${model.items.length}`;
-    hint.textContent = resourceAtlasMode === "conflict" ? `${titleText} · 红点表示需求超过峰值配置或原始负荷记录超配。` : `${titleText} · 按工序窗口逐日平滑展开`;
-    const yAxisMax = resourceAtlasMode === "demand" && model.capacity > 0
+    hint.textContent = `${titleText} · 按工序窗口逐日平滑展开`;
+    const yAxisMax = model.capacity > 0
       ? Math.ceil(Math.max(model.capacity * 1.12, peakValue * 1.25))
-      : resourceAtlasMode === "rate" ? 110 : undefined;
+      : undefined;
     resourceAtlasEl.style.height = "430px";
     resourceAtlasChart.resize();
     resourceAtlasChart.setOption({
@@ -513,11 +501,190 @@
         max: yAxisMax,
         axisLabel: {
           color: "#64748b",
-          formatter: value => resourceAtlasMode === "rate" ? `${value}%` : value,
+          formatter: value => value,
         },
         splitLine: { lineStyle: { color: "#e7edf5" } },
       },
       series,
+    }, true);
+  }
+
+  function renderMachineAtlas(selectedResource) {
+    const hint = document.getElementById("resourceAtlasHint");
+    const metrics = document.getElementById("resourceAtlasMetrics");
+    const model = buildMachineAtlasModel(selectedResource);
+    if (!model.items.length) {
+      resourceAtlasChart.clear();
+      metrics.innerHTML = "";
+      hint.textContent = selectedResource ? "当前资源没有可展示的机械进场记录。" : "暂无可展示的机械进场记录。";
+      return;
+    }
+
+    const maxQuantity = Math.max(...model.items.map(item => item.quantity));
+    const totalMachineDays = model.items.reduce((sum, item) => sum + item.quantity * Math.max(1, daysBetween(item.start, item.end) + 1), 0);
+    metrics.innerHTML = [
+      atlasMetric("展示机械", model.items.length),
+      atlasMetric("最早进场", model.start),
+      atlasMetric("最晚退场", model.end),
+      atlasMetric("最大数量", maxQuantity),
+      atlasMetric("累计台日", roundNumber(totalMachineDays)),
+    ].join("");
+    hint.textContent = selectedResource ? `当前聚焦：${selectedResource} · 机械进场与占用窗口` : `当前显示：主要施工机械进场与占用强度 Top ${model.items.length}`;
+    resourceAtlasEl.style.height = `${Math.max(360, model.items.length * 44 + 135)}px`;
+    resourceAtlasChart.resize();
+    resourceAtlasChart.setOption({
+      animation: false,
+      tooltip: {
+        trigger: "item",
+        formatter: params => {
+          const item = params.data.raw;
+          const spec = item.spec ? `<br>规格/说明：${escapeHtml(item.spec)}` : "";
+          return `<strong>${escapeHtml(item.name)}</strong>${spec}<br>时间：${escapeHtml(item.start)} 至 ${escapeHtml(item.end)}<br>数量：${roundNumber(item.quantity)}`;
+        },
+      },
+      grid: { left: 190, right: 34, top: 44, bottom: 70 },
+      dataZoom: [
+        { type: "slider", xAxisIndex: 0, height: 22, bottom: 24 },
+        { type: "inside", xAxisIndex: 0 },
+      ],
+      xAxis: {
+        type: "time",
+        min: parseDate(model.start),
+        max: parseDate(model.end),
+        axisLabel: { color: "#64748b" },
+        splitLine: { show: true, lineStyle: { color: "#eef2f7" } },
+      },
+      yAxis: {
+        type: "category",
+        data: model.items.map(item => shortName(item.name, 18)),
+        inverse: true,
+        axisLabel: { color: "#334155" },
+      },
+      series: [{
+        name: "机械占用",
+        type: "custom",
+        renderItem: renderMachineAtlasItem,
+        encode: { x: [1, 2], y: 0 },
+        data: model.items.map((item, index) => ({
+          value: [index, parseDate(item.start), parseDate(item.end), item.quantity],
+          raw: item,
+          itemStyle: { color: item.color },
+        })),
+      }],
+    }, true);
+  }
+
+  function renderMachineAtlasItem(params, api) {
+    const categoryIndex = api.value(0);
+    const start = api.coord([api.value(1), categoryIndex]);
+    const end = api.coord([api.value(2), categoryIndex]);
+    const rowHeight = api.size([0, 1])[1];
+    const height = Math.max(12, Math.min(26, rowHeight * 0.58));
+    const rect = echarts.graphic.clipRectByRect(
+      { x: start[0], y: start[1] - height / 2, width: Math.max(end[0] - start[0], 5), height },
+      { x: params.coordSys.x, y: params.coordSys.y, width: params.coordSys.width, height: params.coordSys.height }
+    );
+    if (!rect) return null;
+    const quantity = roundNumber(api.value(3));
+    const children = [{
+      type: "rect",
+      shape: rect,
+      style: api.style({ radius: 5 }),
+    }];
+    if (rect.width >= 28) {
+      children.push({
+        type: "text",
+        x: rect.x + rect.width / 2,
+        y: rect.y + rect.height / 2,
+        style: {
+          text: String(quantity),
+          fill: "#ffffff",
+          font: "600 12px sans-serif",
+          align: "center",
+          verticalAlign: "middle",
+        },
+      });
+    }
+    return { type: "group", children };
+  }
+
+  function renderLaborStructureAtlas(model, peakDate, peakValue, totalDemand) {
+    const hint = document.getElementById("resourceAtlasHint");
+    const metrics = document.getElementById("resourceAtlasMetrics");
+    const totalPeak = model.capacity;
+    const maxItem = model.items.reduce((best, item) => !best || item.peak > best.peak ? item : best, null);
+    metrics.innerHTML = [
+      atlasMetric("展示班组", model.items.length),
+      atlasMetric("峰值配置", `${roundNumber(totalPeak)}人`),
+      atlasMetric("最大班组", maxItem ? `${roundNumber(maxItem.peak)}人` : "-"),
+      atlasMetric("峰值日期", peakDate),
+      atlasMetric("累计工日", roundNumber(totalDemand)),
+    ].join("");
+    hint.textContent = "当前显示：高峰劳动力配置结构，圆环按各班组峰值人数占比计算。";
+    resourceAtlasEl.style.height = "430px";
+    resourceAtlasChart.resize();
+    resourceAtlasChart.setOption({
+      animation: false,
+      color: model.items.map(item => item.color),
+      tooltip: {
+        trigger: "item",
+        formatter: params => `${params.marker}${escapeHtml(params.name)}<br>峰值：${roundNumber(params.value)}人<br>占比：${params.percent}%`,
+      },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        top: 54,
+        right: 28,
+        width: 260,
+        formatter: name => {
+          const item = model.items.find(resource => resource.name === name);
+          return item ? `${shortName(name, 13)}  ${roundNumber(item.peak)}人` : name;
+        },
+      },
+      graphic: [{
+        type: "group",
+        left: "29%",
+        top: "50%",
+        bounding: "raw",
+        children: [
+          {
+            type: "text",
+            left: "center",
+            top: -48,
+            style: { text: "合计", fill: "#64748b", font: "14px sans-serif", align: "center" },
+          },
+          {
+            type: "text",
+            left: "center",
+            top: -18,
+            style: { text: `${roundNumber(totalPeak)}`, fill: "#0f172a", font: "700 30px sans-serif", align: "center" },
+          },
+          {
+            type: "text",
+            left: "center",
+            top: 20,
+            style: { text: "峰值配置", fill: "#64748b", font: "13px sans-serif", align: "center" },
+          },
+        ],
+      }],
+      series: [{
+        name: "劳动力结构",
+        type: "pie",
+        radius: ["42%", "68%"],
+        center: ["30%", "52%"],
+        avoidLabelOverlap: true,
+        label: { show: false },
+        labelLine: { show: false },
+        emphasis: {
+          scale: true,
+          label: { show: true, formatter: "{b}\n{c}人", fontWeight: 600 },
+        },
+        data: model.items.map(item => ({
+          name: item.name,
+          value: Number(item.peak || 0),
+          itemStyle: { color: item.color },
+        })),
+      }],
     }, true);
   }
 
@@ -588,6 +755,52 @@
     return { items, dates, totals, capacity, conflictPoints };
   }
 
+  function buildMachineAtlasModel(selectedResource) {
+    const palette = ["#4f46e5", "#ea580c", "#2563eb", "#0891b2", "#9333ea", "#0d9488", "#64748b", "#dc2626"];
+    const scheduleByTask = new Map();
+    const projectDates = [];
+    for (const task of payload.tasks || []) {
+      if (!task.task_id) continue;
+      scheduleByTask.set(String(task.task_id), task);
+      const start = safeDateIso(task.planned_start);
+      const end = safeDateIso(task.planned_finish);
+      if (start) projectDates.push(start);
+      if (end) projectDates.push(end);
+    }
+
+    const items = [];
+    for (const row of payload.resources || []) {
+      if (!isMachineResource(row)) continue;
+      const name = String(row.resource_name || row.resource_type || "机械设备").trim();
+      if (selectedResource && name !== selectedResource) continue;
+      const task = scheduleByTask.get(String(row.task_id || "").trim());
+      if (!task) continue;
+      const start = safeDateIso(task.planned_start);
+      const end = safeDateIso(task.planned_finish);
+      if (!name || !start || !end) continue;
+      const quantity = Math.max(1, Math.round(Number(row.demand || 1)));
+      items.push({
+        name,
+        spec: cleanResourceSpec(row.unit) || cleanResourceSpec(row.period),
+        quantity,
+        start,
+        end,
+        duration: Math.max(1, daysBetween(start, end) + 1),
+      });
+    }
+
+    items.sort((a, b) => (b.quantity - a.quantity) || (b.duration - a.duration));
+    const visibleItems = items.slice(0, selectedResource ? 1 : 8).map((item, index) => ({
+      ...item,
+      color: palette[index % palette.length],
+    }));
+    const fallbackDates = visibleItems.flatMap(item => [item.start, item.end]);
+    const bounds = projectDates.length ? projectDates : fallbackDates;
+    const start = bounds.length ? bounds.reduce((min, value) => parseDate(value) < parseDate(min) ? value : min, bounds[0]) : "";
+    const end = bounds.length ? bounds.reduce((max, value) => parseDate(value) > parseDate(max) ? value : max, bounds[0]) : "";
+    return { items: visibleItems, start, end };
+  }
+
   function buildAtlasConflictPoints(items, dates, totals, capacity, selectedResource) {
     const points = [];
     dates.forEach((date, index) => {
@@ -633,6 +846,21 @@
   function isLaborResource(row) {
     const text = `${row.resource_type || ""} ${row.resource_name || ""}`.toLowerCase();
     return text.includes("labor") || text.includes("班组") || text.includes("工");
+  }
+
+  function isMachineResource(row) {
+    const resourceType = String(row.resource_type || "").toLowerCase();
+    if (resourceType.includes("labor")) return false;
+    const text = `${resourceType} ${row.resource_name || ""}`.toLowerCase();
+    return text.includes("equipment") || text.includes("机械") || text.includes("塔吊") || text.includes("施工电梯") || text.includes("设备");
+  }
+
+  function cleanResourceSpec(value) {
+    return String(value || "")
+      .replace(/台班/g, "")
+      .replace(/台/g, "")
+      .replace(/[()（）]/g, "")
+      .trim();
   }
 
   function smoothWindowJs(day, start, end, peak, ramp) {
