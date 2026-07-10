@@ -214,6 +214,15 @@ def text_wh(draw: ImageDraw.ImageDraw, text: str, ft: ImageFont.ImageFont) -> tu
     return box[2] - box[0], box[3] - box[1]
 
 
+def fit_text(draw: ImageDraw.ImageDraw, text: str, ft: ImageFont.ImageFont, max_width: int) -> str:
+    if text_wh(draw, text, ft)[0] <= max_width:
+        return text
+    text = text.strip()
+    while text and text_wh(draw, text + "…", ft)[0] > max_width:
+        text = text[:-1]
+    return text + "…" if text else "…"
+
+
 def rounded(draw: ImageDraw.ImageDraw, box, radius, fill, outline=None, width=1):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
@@ -295,7 +304,8 @@ def month_starts(start: date, end: date) -> list[date]:
 
 
 def draw_header(draw, data):
-    draw.text((118, 82), data["project"]["title"], font=F["title"], fill=INK)
+    title = fit_text(draw, data["project"]["title"], F["title"], 1470)
+    draw.text((118, 82), title, font=F["title"], fill=INK)
     draw.text((122, 174), data["project"]["subtitle"], font=F["subtitle"], fill=MUTED)
     x = 1650
     for metric in data.get("metrics", []):
@@ -428,8 +438,8 @@ def draw_machine_panel(img, draw, data, start, end):
         y = top + i * row_h
         color = machine.get("color", "#2563EB")
         qty = float(machine.get("quantity", 0))
-        draw.text((px + 68, y + 6), machine["name"], font=F["small"], fill=INK)
-        draw.text((px + 68, y + 35), machine.get("spec", ""), font=F["tiny"], fill=MUTED)
+        draw.text((px + 68, y + 6), fit_text(draw, machine["name"], F["small"], 230), font=F["small"], fill=INK)
+        draw.text((px + 68, y + 35), fit_text(draw, machine.get("spec", ""), F["tiny"], 230), font=F["tiny"], fill=MUTED)
         draw.line((left, y + row_h - 7, left + width, y + row_h - 7), fill="#EDF2F7", width=1)
 
         x0 = int(date_x(parse_date(machine["start"]), start, end, left, width))
