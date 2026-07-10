@@ -198,6 +198,7 @@ def load_font(kind: str, size: int) -> ImageFont.ImageFont:
 
 F = {
     "title": load_font("bold", 68),
+    "title_small": load_font("bold", 54),
     "subtitle": load_font("regular", 31),
     "panel": load_font("bold", 38),
     "label": load_font("regular", 27),
@@ -221,6 +222,30 @@ def fit_text(draw: ImageDraw.ImageDraw, text: str, ft: ImageFont.ImageFont, max_
     while text and text_wh(draw, text + "…", ft)[0] > max_width:
         text = text[:-1]
     return text + "…" if text else "…"
+
+
+def wrap_text(draw: ImageDraw.ImageDraw, text: str, ft: ImageFont.ImageFont, max_width: int, max_lines: int) -> list[str]:
+    chars = list(text.strip())
+    lines: list[str] = []
+    current = ""
+    for char in chars:
+        candidate = current + char
+        if current and text_wh(draw, candidate, ft)[0] > max_width:
+            lines.append(current)
+            current = char
+            if len(lines) == max_lines - 1:
+                break
+        else:
+            current = candidate
+    remaining = "".join(chars[len("".join(lines) + current):])
+    if remaining:
+        current += remaining
+    if current:
+        if len(lines) >= max_lines:
+            lines[-1] = fit_text(draw, lines[-1] + current, ft, max_width)
+        else:
+            lines.append(fit_text(draw, current, ft, max_width))
+    return lines[:max_lines]
 
 
 def rounded(draw: ImageDraw.ImageDraw, box, radius, fill, outline=None, width=1):
@@ -304,9 +329,11 @@ def month_starts(start: date, end: date) -> list[date]:
 
 
 def draw_header(draw, data):
-    title = fit_text(draw, data["project"]["title"], F["title"], 1470)
-    draw.text((118, 82), title, font=F["title"], fill=INK)
-    draw.text((122, 174), data["project"]["subtitle"], font=F["subtitle"], fill=MUTED)
+    title_lines = wrap_text(draw, data["project"]["title"], F["title_small"], 1470, 2)
+    for index, line in enumerate(title_lines):
+        draw.text((118, 58 + index * 62), line, font=F["title_small"], fill=INK)
+    subtitle_y = 58 + len(title_lines) * 62 + 6
+    draw.text((122, subtitle_y), data["project"]["subtitle"], font=F["subtitle"], fill=MUTED)
     x = 1650
     for metric in data.get("metrics", []):
         x += draw_pill(draw, x, 80, metric["label"], metric["value"], metric.get("color", "#2563EB")) + 20
@@ -681,8 +708,11 @@ def _is_labor(row: dict[str, Any]) -> bool:
 
 
 def _is_machine(row: dict[str, Any]) -> bool:
-    text = f"{row.get('resource_type') or ''} {row.get('resource_name') or ''}".lower()
-    return "equipment" in text or "机械" in text or "塔吊" in text or "电梯" in text or "设备" in text
+    resource_type = str(row.get("resource_type") or "").lower()
+    if "labor" in resource_type:
+        return False
+    text = f"{resource_type} {row.get('resource_name') or ''}".lower()
+    return "equipment" in text or "机械" in text or "塔吊" in text or "施工电梯" in text or "设备" in text
 
 
 def _safe_date(value: Any) -> date | None:
