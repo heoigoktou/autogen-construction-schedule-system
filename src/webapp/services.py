@@ -9,6 +9,7 @@ from typing import Any
 
 from blackboard.excel_store import ExcelBlackboardStore
 from tools.constraint_tools import check_constraints
+from tools.resource_dashboard_generator import render_dashboard_from_rows
 from tools.resource_tools import build_resource_load, build_resource_resolution
 from tools.schedule_tools import (
     build_initial_schedule,
@@ -39,7 +40,7 @@ EXPORT_FILES = {
     "gantt": f"{DEFAULT_OUTPUT_DIRNAME}/gantt_chart.png",
     "cpm_network": f"{DEFAULT_OUTPUT_DIRNAME}/cpm_network.png",
     "cpm_float": f"{DEFAULT_OUTPUT_DIRNAME}/cpm_float_chart.png",
-    "resource_heatmap": f"{DEFAULT_OUTPUT_DIRNAME}/resource_load_heatmap.png",
+    "resource_heatmap": f"{DEFAULT_OUTPUT_DIRNAME}/resource_load_dashboard.png",
     "resource_bars": f"{DEFAULT_OUTPUT_DIRNAME}/resource_load_bars.png",
     "preprocess_json": f"{PREPROCESS_DIRNAME}/{PREPROCESS_JSON}",
     "preprocess_markdown": f"{PREPROCESS_DIRNAME}/{PREPROCESS_MARKDOWN}",
@@ -100,6 +101,16 @@ def recalculate_blackboard_outputs(
         outputs_root / DEFAULT_OUTPUT_DIRNAME,
         title=title,
     )
+    dashboard_path = outputs_root / DEFAULT_OUTPUT_DIRNAME / "resource_load_dashboard.png"
+    render_dashboard_from_rows(
+        project_parameters=project_parameters,
+        schedule_rows=schedule_rows,
+        resource_rows=resource_rows,
+        milestone_rows=milestone_rows,
+        event_rows=store.read_rows("event_log"),
+        output=dashboard_path,
+    )
+    visualization_result.artifacts["resource_load_dashboard"] = dashboard_path
     return {
         "schedule_initial": len(schedule_rows),
         "cpm_analysis": len(cpm_rows),
@@ -217,8 +228,7 @@ def list_existing_artifacts(outputs_root: Path, blackboard_path: Path) -> list[d
         "gantt": "甘特图",
         "cpm_network": "CPM 网络图",
         "cpm_float": "CPM 时差图",
-        "resource_heatmap": "资源热力图",
-        "resource_bars": "资源柱状图",
+        "resource_heatmap": "资源负荷图谱",
         "preprocess_json": "标准化输入包 JSON",
         "preprocess_markdown": "标准化输入包 Markdown",
         "visual_data": "交互看板 JSON",

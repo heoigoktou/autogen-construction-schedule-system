@@ -964,7 +964,7 @@ def group_artifacts(artifacts: list[dict[str, str]]) -> list[dict[str, Any]]:
             {"resources", "resource_load", "resource_load_json", "resource_resolution", "milestones", "milestones_json", "constraints", "adjustments_json"},
         ),
         ("preprocess", "资料预处理", {"preprocess_json", "preprocess_markdown"}),
-        ("report", "图表与报告", {"summary", "visual_report", "gantt", "cpm_network", "cpm_float", "resource_heatmap", "resource_bars"}),
+        ("report", "图表与报告", {"summary", "visual_report", "gantt", "cpm_network", "cpm_float", "resource_heatmap"}),
     ]
     by_key = {item["key"]: item for item in artifacts}
     grouped = []
