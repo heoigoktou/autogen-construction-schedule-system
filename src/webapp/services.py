@@ -110,6 +110,10 @@ def recalculate_blackboard_outputs(
         event_rows=store.read_rows("event_log"),
         output=dashboard_path,
     )
+    for legacy_key in ("resource_load_heatmap", "resource_load_bars"):
+        legacy_path = visualization_result.artifacts.pop(legacy_key, None)
+        if legacy_path:
+            legacy_path.unlink(missing_ok=True)
     visualization_result.artifacts["resource_load_dashboard"] = dashboard_path
     return {
         "schedule_initial": len(schedule_rows),
