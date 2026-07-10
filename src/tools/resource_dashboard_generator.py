@@ -215,6 +215,17 @@ def text_wh(draw: ImageDraw.ImageDraw, text: str, ft: ImageFont.ImageFont) -> tu
     return box[2] - box[0], box[3] - box[1]
 
 
+def draw_text_center(draw: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, ft: ImageFont.ImageFont, fill: str) -> None:
+    box = draw.textbbox((0, 0), text, font=ft)
+    w = box[2] - box[0]
+    h = box[3] - box[1]
+    draw.text((xy[0] - w / 2 - box[0], xy[1] - h / 2 - box[1]), text, font=ft, fill=fill)
+
+
+def clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
 def fit_text(draw: ImageDraw.ImageDraw, text: str, ft: ImageFont.ImageFont, max_width: int) -> str:
     if text_wh(draw, text, ft)[0] <= max_width:
         return text
@@ -313,7 +324,6 @@ def draw_panel_title(draw, x, y, letter, title, subtitle):
     rounded(draw, (x, y, x + 62, y + 52), 14, INK)
     draw.text((x + 19, y + 7), letter, font=F["panel"], fill="#FFFFFF")
     draw.text((x + 82, y + 1), title, font=F["panel"], fill=INK)
-    draw.text((x + 82, y + 48), subtitle, font=F["small"], fill=MUTED)
 
 
 def month_starts(start: date, end: date) -> list[date]:
@@ -328,12 +338,101 @@ def month_starts(start: date, end: date) -> list[date]:
     return out
 
 
+def month_label_step(draw: ImageDraw.ImageDraw, months: list[date], width: int, ft: ImageFont.ImageFont) -> int:
+    if len(months) <= 1:
+        return 1
+    max_label_width = max(text_wh(draw, item.strftime("%Y-%m"), ft)[0] for item in months)
+    average_gap = width / max(len(months) - 1, 1)
+    return max(1, math.ceil((max_label_width + 28) / max(average_gap, 1)))
+
+
+def month_label_positions(
+    draw: ImageDraw.ImageDraw,
+    start: date,
+    end: date,
+    left: int,
+    width: int,
+    ft: ImageFont.ImageFont,
+) -> list[tuple[float, str]]:
+    months = month_starts(start, end)
+    if not months:
+        return []
+    max_label_width = max(text_wh(draw, item.strftime("%Y-%m"), ft)[0] for item in months)
+    min_gap = max_label_width + 32
+    labels: list[tuple[float, str]] = []
+    last_right = float("-inf")
+    for mday in months:
+        tick_day = max(mday, start)
+        x = clamp(date_x(tick_day, start, end, left, width), left, left + width)
+        label = mday.strftime("%Y-%m")
+        label_w, _ = text_wh(draw, label, ft)
+        x0 = clamp(x - label_w / 2, left, left + width - label_w)
+        if x0 >= last_right + 16:
+            labels.append((x0, label))
+            last_right = x0 + max(label_w, min_gap - 32)
+    return labels
+
+
+def y_tick_step(ymax: float, target_ticks: int = 8) -> int:
+    if ymax <= 175:
+        return 25
+    raw = max(ymax / target_ticks, 1)
+    magnitude = 10 ** math.floor(math.log10(raw))
+    normalized = raw / magnitude
+    if normalized <= 1:
+        nice = 1
+    elif normalized <= 2:
+        nice = 2
+    elif normalized <= 5:
+        nice = 5
+    else:
+        nice = 10
+    return int(nice * magnitude)
+
+
+def place_label_box(
+    *,
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    ft: ImageFont.ImageFont,
+    x: float,
+    y_options: list[int],
+    min_x: int,
+    max_x: int,
+    occupied: list[tuple[float, float, float, float]],
+    pad_x: int = 14,
+    pad_y: int = 8,
+    max_width: int = 260,
+) -> tuple[float, float, float, float, str]:
+    label = fit_text(draw, text, ft, max_width)
+    tw, th = text_wh(draw, label, ft)
+    box_w = tw + pad_x * 2
+    box_h = th + pad_y * 2
+    x0 = clamp(x - box_w / 2, min_x, max_x - box_w)
+    chosen = y_options[-1]
+    for y in y_options:
+        candidate = (x0, y, x0 + box_w, y + box_h)
+        if all(candidate[2] < used[0] or candidate[0] > used[2] or candidate[3] < used[1] or candidate[1] > used[3] for used in occupied):
+            chosen = y
+            break
+    final_box = (x0, chosen, x0 + box_w, chosen + box_h)
+    occupied.append(final_box)
+    return (*final_box, label)
+
+
+def clean_axis_spec(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in {"台", "人", "个", "项", "条", "套", "组", "班", "工日", "日"}:
+        return ""
+    return text
+
+
 def draw_header(draw, data):
-    title_lines = wrap_text(draw, data["project"]["title"], F["title_small"], 1470, 2)
+    title_lines = wrap_text(draw, data["project"]["title"], F["title_small"], 1470, 3)
     for index, line in enumerate(title_lines):
-        draw.text((118, 58 + index * 62), line, font=F["title_small"], fill=INK)
-    subtitle_y = 58 + len(title_lines) * 62 + 6
-    draw.text((122, subtitle_y), data["project"]["subtitle"], font=F["subtitle"], fill=MUTED)
+        draw.text((118, 48 + index * 56), line, font=F["title_small"], fill=INK)
+    subtitle_y = min(210, 48 + len(title_lines) * 56 + 4)
+    draw.text((122, subtitle_y), fit_text(draw, data["project"]["subtitle"], F["subtitle"], 1450), font=F["subtitle"], fill=MUTED)
     x = 1650
     for metric in data.get("metrics", []):
         x += draw_pill(draw, x, 80, metric["label"], metric["value"], metric.get("color", "#2563EB")) + 20
@@ -360,6 +459,7 @@ def draw_labor_panel(img, draw, data, days, start, end):
 
     overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
     od = ImageDraw.Draw(overlay)
+    risk_labels: list[tuple[int, str, str]] = []
     for risk in data.get("risk_windows", []):
         x0 = int(date_x(parse_date(risk["start"]), start, end, left, width))
         x1 = int(date_x(parse_date(risk["end"]), start, end, left, width))
@@ -367,22 +467,37 @@ def draw_labor_panel(img, draw, data, days, start, end):
         od.rectangle((x0, top, x1, bottom), fill=rgba(color, 30))
         od.line((x0, top, x0, bottom), fill=rgba(color, 110), width=2)
         od.line((x1, top, x1, bottom), fill=rgba(color, 80), width=1)
-        tw, _ = text_wh(draw, risk["label"], F["tiny"])
-        draw.rounded_rectangle((x0 + 8, top + 13, x0 + tw + 30, top + 48), radius=10, fill=PANEL, outline=color, width=1)
-        draw.text((x0 + 19, top + 18), risk["label"], font=F["tiny"], fill=color)
+        risk_labels.append(((x0 + x1) // 2, str(risk["label"]), color))
     img.alpha_composite(overlay)
+    occupied_risk: list[tuple[float, float, float, float]] = []
+    for x, label, color in sorted(risk_labels, key=lambda item: item[0]):
+        x0, y0, x1, y1, fitted = place_label_box(
+            draw=draw,
+            text=label,
+            ft=F["tiny"],
+            x=x,
+            y_options=[top + 13, top + 53, top + 93],
+            min_x=left + 8,
+            max_x=left + width - 8,
+            occupied=occupied_risk,
+            max_width=340,
+        )
+        draw.rounded_rectangle((x0, y0, x1, y1), radius=10, fill=PANEL, outline=color, width=1)
+        draw.text((x0 + 14, y0 + 8), fitted, font=F["tiny"], fill=color)
 
-    step = 25 if ymax <= 175 else 50
+    step = y_tick_step(ymax)
     for v in range(0, int(ymax) + 1, step):
         y = int(y_map(v, bottom, height, ymax))
         draw.line((left, y, left + width, y), fill=GRID, width=2 if v == 0 else 1)
         draw.text((left - 70, y - 15), str(v), font=F["tiny"], fill=MUTED)
     draw.text((left - 112, top - 8), "人数", font=F["small"], fill=MUTED)
 
-    for mday in month_starts(start, end):
-        x = int(date_x(mday, start, end, left, width))
+    months = month_starts(start, end)
+    for mday in months:
+        x = int(clamp(date_x(max(mday, start), start, end, left, width), left, left + width))
         draw.line((x, top, x, bottom), fill="#E8EEF5", width=1)
-        draw.text((x + 6, bottom + 24), f"{mday.month}月", font=F["small"], fill=MUTED)
+    for label_x, label in month_label_positions(draw, start, end, left, width, F["tiny"]):
+        draw.text((label_x, bottom + 22), label, font=F["tiny"], fill=MUTED)
     draw.line((left, bottom, left + width, bottom), fill="#334155", width=3)
     draw.line((left, top, left, bottom), fill="#334155", width=3)
 
@@ -411,34 +526,62 @@ def draw_labor_panel(img, draw, data, days, start, end):
         draw.line((x, ycap, x + 17, ycap), fill="#EF4444", width=3)
     draw.text((left + width - 300, ycap - 36), f"峰值配置总量 {int(capacity)}人", font=F["small"], fill="#EF4444")
 
-    for i, milestone in enumerate(data.get("milestones", [])):
+    occupied_milestones: list[tuple[float, float, float, float]] = []
+    for milestone in sorted(data.get("milestones", []), key=lambda item: parse_date(item["date"])):
         mday = parse_date(milestone["date"])
         x = int(date_x(mday, start, end, left, width))
         draw.line((x, top - 8, x, bottom + 6), fill="#475569", width=2)
         draw.ellipse((x - 7, bottom - 7, x + 7, bottom + 7), fill=INK)
-        y_text = bottom + 70 + (i % 2) * 38
-        draw.text((x - 50, y_text), milestone["label"], font=F["tiny"], fill=INK)
-        draw.text((x - 64, y_text + 26), mday.strftime("%m.%d"), font=F["tiny"], fill=MUTED)
+        x0, y0, x1, y1, fitted = place_label_box(
+            draw=draw,
+            text=str(milestone["label"]),
+            ft=F["tiny"],
+            x=x,
+            y_options=[bottom + 68, bottom + 126, bottom + 184],
+            min_x=left,
+            max_x=left + width,
+            occupied=occupied_milestones,
+            pad_x=8,
+            pad_y=4,
+            max_width=210,
+        )
+        draw_text_center(draw, ((x0 + x1) / 2, y0 + 12), fitted, F["tiny"], INK)
+        draw_text_center(draw, ((x0 + x1) / 2, y0 + 38), mday.strftime("%Y.%m.%d"), F["tiny"], MUTED)
 
-    lx, ly = px + 132, py + 135
-    count = len(data["labor"])
-    gap = max(320, min(440, (pw - 280) // max(count, 1)))
+    lx, ly = px + 132, py + 128
+    legend_cols = 4
+    col_w = (pw - 300) // legend_cols
     for i, labor in enumerate(data["labor"]):
-        x = lx + i * gap
-        draw.rounded_rectangle((x, ly, x + 34, ly + 34), radius=8, fill=labor.get("color", "#2563EB"))
-        draw.text((x + 48, ly + 2), f"{labor['name']} {int(labor.get('peak', 0))}人", font=F["small"], fill=INK)
+        row = i // legend_cols
+        col = i % legend_cols
+        x = lx + col * col_w
+        y = ly + row * 44
+        label = fit_text(draw, f"{labor['name']} {int(labor.get('peak', 0))}人", F["small"], col_w - 58)
+        draw.rounded_rectangle((x, y, x + 34, y + 34), radius=8, fill=labor.get("color", "#2563EB"))
+        draw.text((x + 48, y + 2), label, font=F["small"], fill=INK)
 
     if labor_total:
-        peak_idx = max(range(len(labor_total)), key=lambda i: labor_total[i])
+        max_value = max(labor_total)
+        peak_indices = [i for i, value in enumerate(labor_total) if abs(value - max_value) < 1e-6]
+        peak_idx = peak_indices[len(peak_indices) // 2]
         peak_day = days[peak_idx]
         peak_value = int(round(labor_total[peak_idx]))
         px_peak = int(date_x(peak_day, start, end, left, width))
         py_peak = int(y_map(labor_total[peak_idx], bottom, height, ymax))
+        draw.line((px_peak, top, px_peak, bottom), fill="#0F172A", width=2)
         draw.ellipse((px_peak - 13, py_peak - 13, px_peak + 13, py_peak + 13), fill=PANEL, outline="#0F172A", width=5)
-        draw.line((px_peak + 18, py_peak - 18, px_peak + 180, py_peak - 104), fill="#0F172A", width=3)
-        rounded(draw, (px_peak + 182, py_peak - 154, px_peak + 548, py_peak - 72), 18, "#0F172A")
-        draw.text((px_peak + 205, py_peak - 143), "模型峰值负荷", font=F["small"], fill="#CBD5E1")
-        draw.text((px_peak + 205, py_peak - 112), f"{peak_day.strftime('%Y.%m.%d')} · {peak_value}人", font=F["badge"], fill=PANEL)
+        box_w, box_h = 366, 82
+        box_x = px_peak + 182
+        if box_x + box_w > left + width:
+            box_x = px_peak - box_w - 182
+            elbow_x = box_x + box_w
+        else:
+            elbow_x = box_x
+        box_y = clamp(py_peak - 154, top + 14, bottom - box_h - 14)
+        draw.line((px_peak, py_peak, elbow_x, box_y + box_h / 2), fill="#0F172A", width=3)
+        rounded(draw, (box_x, box_y, box_x + box_w, box_y + box_h), 18, "#0F172A")
+        draw.text((box_x + 23, box_y + 11), "模型峰值负荷", font=F["small"], fill="#CBD5E1")
+        draw.text((box_x + 23, box_y + 42), f"{peak_day.strftime('%Y.%m.%d')} · {peak_value}人", font=F["badge"], fill=PANEL)
 
 
 def draw_machine_panel(img, draw, data, start, end):
@@ -454,10 +597,12 @@ def draw_machine_panel(img, draw, data, start, end):
     )
 
     left, top, width, row_h = px + 330, py + 180, pw - 430, 68
-    for mday in month_starts(start, end):
-        x = int(date_x(mday, start, end, left, width))
+    months = month_starts(start, end)
+    for mday in months:
+        x = int(clamp(date_x(max(mday, start), start, end, left, width), left, left + width))
         draw.line((x, top - 22, x, top + row_h * len(data.get("machines", [])) + 20), fill="#E7EDF5", width=1)
-        draw.text((x + 6, top - 58), f"{mday.month}月", font=F["tiny"], fill=MUTED)
+    for label_x, label in month_label_positions(draw, start, end, left, width, F["tiny"]):
+        draw.text((label_x, top - 58), label, font=F["tiny"], fill=MUTED)
     draw.line((left, top + row_h * len(data.get("machines", [])) + 18, left + width, top + row_h * len(data.get("machines", [])) + 18), fill="#334155", width=2)
 
     max_qty = max([float(m.get("quantity", 0)) for m in data.get("machines", [])] or [1.0])
@@ -466,7 +611,9 @@ def draw_machine_panel(img, draw, data, start, end):
         color = machine.get("color", "#2563EB")
         qty = float(machine.get("quantity", 0))
         draw.text((px + 68, y + 6), fit_text(draw, machine["name"], F["small"], 230), font=F["small"], fill=INK)
-        draw.text((px + 68, y + 35), fit_text(draw, machine.get("spec", ""), F["tiny"], 230), font=F["tiny"], fill=MUTED)
+        spec = fit_text(draw, clean_axis_spec(machine.get("spec", "")), F["tiny"], 230)
+        if spec:
+            draw.text((px + 68, y + 35), spec, font=F["tiny"], fill=MUTED)
         draw.line((left, y + row_h - 7, left + width, y + row_h - 7), fill="#EDF2F7", width=1)
 
         x0 = int(date_x(parse_date(machine["start"]), start, end, left, width))
@@ -474,8 +621,21 @@ def draw_machine_panel(img, draw, data, start, end):
         intensity = qty / max_qty if max_qty else 0
         fill = blend("#EAF2FF", color, 0.36 + 0.52 * intensity)
         draw.rounded_rectangle((x0, y + 11, x1, y + 50), radius=12, fill=fill, outline=color, width=2)
-        draw.text((x0 + 14, y + 18), f"{int(qty)}台", font=F["badge"], fill=PANEL if qty >= 4 else INK)
-        draw.text((x1 + 10, y + 18), parse_date(machine["end"]).strftime("%m.%d"), font=F["tiny"], fill=MUTED)
+        qty_label = f"{int(qty)}"
+        qty_w, qty_h = text_wh(draw, qty_label, F["badge"])
+        end_label = parse_date(machine["end"]).strftime("%Y.%m.%d")
+        end_w, _ = text_wh(draw, end_label, F["tiny"])
+        bar_w = max(1, x1 - x0)
+        if bar_w >= qty_w + end_w + 42:
+            draw.text((x0 + (bar_w - qty_w) / 2, y + 18), qty_label, font=F["badge"], fill=PANEL if qty >= 4 else INK)
+            draw.text((x1 + 10, y + 18), end_label, font=F["tiny"], fill=MUTED)
+        elif bar_w >= qty_w + 24:
+            draw.text((x0 + (bar_w - qty_w) / 2, y + 18), qty_label, font=F["badge"], fill=PANEL if qty >= 4 else INK)
+            label_x = clamp(x1 + 10, left, left + width - end_w)
+            draw.text((label_x, y + 18), end_label, font=F["tiny"], fill=MUTED)
+        else:
+            label_x = max(left, x0 - qty_w - 12) if x0 - left > qty_w + 18 else x1 + 8
+            draw.text((label_x, y + 17), qty_label, font=F["badge"], fill=INK)
 
 def draw_donut(draw, data):
     px, py, pw, ph = 2250, 1244, 1258, 760
@@ -497,10 +657,17 @@ def draw_donut(draw, data):
         draw.pieslice((cx - r, cy - r, cx + r, cy + r), start=start_angle, end=start_angle + extent, fill=labor.get("color", "#2563EB"))
         start_angle += extent
     draw.ellipse((cx - 118, cy - 118, cx + 118, cy + 118), fill=PANEL)
-    draw.text((cx - 82, cy - 66), "合计", font=F["small"], fill=MUTED)
-    draw.text((cx - 90, cy - 24), f"{int(total)}", font=F["mono_big"], fill=INK)
-    draw.text((cx + 8, cy - 9), "人", font=F["small"], fill=INK)
-    draw.text((cx - 70, cy + 42), "峰值配置", font=F["small"], fill=MUTED)
+    total_label = "合计"
+    total_value = f"{int(total)}"
+    unit = "人"
+    caption = "峰值配置"
+    value_w, _ = text_wh(draw, total_value, F["mono_big"])
+    unit_w, _ = text_wh(draw, unit, F["small"])
+    group_w = value_w + unit_w + 18
+    draw_text_center(draw, (cx, cy - 58), total_label, F["small"], MUTED)
+    draw.text((cx - group_w / 2, cy - 26), total_value, font=F["mono_big"], fill=INK)
+    draw.text((cx - group_w / 2 + value_w + 18, cy - 11), unit, font=F["small"], fill=INK)
+    draw_text_center(draw, (cx, cy + 62), caption, F["small"], MUTED)
 
     lx, ly = px + 650, py + 205
     for i, labor in enumerate(data.get("labor", [])[:7]):
@@ -509,7 +676,7 @@ def draw_donut(draw, data):
         peak = float(labor.get("peak", 0))
         pct = peak / total if total else 0
         draw.rounded_rectangle((lx, y, lx + 30, y + 30), radius=8, fill=color)
-        draw.text((lx + 47, y - 2), labor["name"], font=F["small"], fill=INK)
+        draw.text((lx + 47, y - 2), fit_text(draw, labor["name"], F["small"], 190), font=F["small"], fill=INK)
         draw.text((lx + 260, y - 2), f"{int(peak)}人", font=F["small"], fill=INK)
         draw.rounded_rectangle((lx + 350, y + 5, lx + 542, y + 25), radius=10, fill="#E8EEF5")
         draw.rounded_rectangle((lx + 350, y + 5, lx + 350 + int(192 * pct), y + 25), radius=10, fill=color)
@@ -639,7 +806,7 @@ def _build_machine_items(resource_rows: list[dict[str, Any]], schedule_by_task: 
         items.append(
             {
                 "name": str(row.get("resource_name") or "机械设备"),
-                "spec": str(row.get("unit") or row.get("period") or ""),
+                "spec": clean_axis_spec(row.get("unit")) or clean_axis_spec(row.get("period")),
                 "quantity": max(1, int(round(_safe_float(row.get("demand")) or 1))),
                 "start": start.isoformat(),
                 "end": end.isoformat(),
