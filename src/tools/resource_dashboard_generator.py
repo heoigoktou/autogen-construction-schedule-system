@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import urllib.request
 from copy import deepcopy
 from datetime import date, datetime, timedelta
@@ -710,7 +711,7 @@ def build_dashboard_data_from_rows(
     finishes = [item for item in finishes if item]
     start = min(starts) if starts else date.today()
     end = max(finishes) if finishes else start
-    project_name = _parameter_value(project_parameters, "P-004") or "施工项目"
+    project_name = _infer_project_name(project_parameters)
     area = _parameter_value(project_parameters, "P-011")
     total_days = (end - start).days + 1
 
@@ -864,6 +865,42 @@ def _parameter_value(rows: list[dict[str, Any]], parameter_id: str) -> str:
         if str(row.get("parameter_id") or "") == parameter_id:
             return str(row.get("value") or "")
     return ""
+
+
+def _infer_project_name(rows: list[dict[str, Any]]) -> str:
+    direct = _parameter_value(rows, "P-004").strip()
+    if direct:
+        return direct
+    for row in rows:
+        for key in ("value", "note", "source", "evidence_id"):
+            candidate = _clean_project_name(str(row.get(key) or ""))
+            if candidate:
+                return candidate
+    return "施工项目"
+
+
+def _clean_project_name(text: str) -> str:
+    text = text.strip()
+    if not text or "项目" not in text:
+        return ""
+    match = re.search(r"([^\\/：:\n\r]+?项目[^\\/：:\n\r]*?)\.(?:docx?|xlsx?|pdf|md|txt)", text, flags=re.IGNORECASE)
+    if match:
+        text = match.group(1)
+    elif len(text) > 60:
+        return ""
+    text = re.sub(r"^.*?[：:]\s*", "", text)
+    for suffix in (
+        "关键参数与进度调整用例",
+        "关键参数",
+        "进度调整用例",
+        "施工组织设计",
+        "项目策划",
+        "策划",
+        "任务书",
+    ):
+        text = text.replace(suffix, "")
+    text = re.sub(r"\d{6,}$", "", text).strip(" _-—，,。")
+    return text if 2 <= len(text) <= 40 and "项目" in text else ""
 
 
 def _is_labor(row: dict[str, Any]) -> bool:
