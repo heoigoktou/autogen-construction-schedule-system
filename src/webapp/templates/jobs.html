@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-{% set ns = namespace(running=0, succeeded=0, failed=0, cancelled=0, warning=0) %}
+{% set ns = namespace(running=0, succeeded=0, failed=0, cancelled=0, review=0, warning=0) %}
 {% for job in jobs %}
   {% if job.metadata.status == "running" or job.metadata.status == "queued" or job.metadata.status == "cancelling" %}
     {% set ns.running = ns.running + 1 %}
@@ -10,6 +10,8 @@
     {% set ns.failed = ns.failed + 1 %}
   {% elif job.metadata.status == "cancelled" %}
     {% set ns.cancelled = ns.cancelled + 1 %}
+  {% elif job.metadata.status == "fallback_review" %}
+    {% set ns.review = ns.review + 1 %}
   {% endif %}
   {% if job.metadata.preflight_warnings %}
     {% set ns.warning = ns.warning + 1 %}
@@ -43,10 +45,10 @@
   </div>
   <div class="stat-card stat-warning">
     <div class="stat-card-head">
-      <span>风险警告</span>
+      <span>待复核</span>
       <svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></svg>
     </div>
-    <strong>{{ ns.warning }}</strong>
+    <strong>{{ ns.review }}</strong>
   </div>
   <div class="stat-card stat-failed">
     <div class="stat-card-head">
@@ -67,6 +69,7 @@
       <button type="button" class="tool-chip active" data-status-filter="">全部</button>
       <button type="button" class="tool-chip" data-status-filter="running,queued,cancelling">运行中</button>
       <button type="button" class="tool-chip" data-status-filter="succeeded">成功</button>
+      <button type="button" class="tool-chip" data-status-filter="fallback_review">待复核</button>
       <button type="button" class="tool-chip" data-status-filter="failed,cancelled">失败/中止</button>
       <button type="button" class="tool-chip" data-date-filter="week">本周</button>
     </div>
@@ -91,7 +94,7 @@
           <a href="/jobs/{{ job.job_id }}">{{ job.metadata.name or job.job_id }}</a>
           <span class="mono-cell">{{ job.job_id }}</span>
         </td>
-        <td><span class="status status-{{ job.metadata.status }}">{{ job.metadata.status }}</span></td>
+        <td><span class="status status-{{ job.metadata.status }}">{{ status_label(job.metadata.status) }}</span></td>
         <td>{{ job.metadata.created_at|date_only }}</td>
         <td>{{ job.metadata.started_at|date_only }}</td>
         <td>{{ job.metadata.finished_at|date_only }}</td>
@@ -100,10 +103,10 @@
           <div class="row-actions">
             <a class="text-action" href="/jobs/{{ job.job_id }}">查看</a>
             <a class="text-action" href="/jobs/{{ job.job_id }}/logs">日志</a>
-            {% if job.metadata.status == "succeeded" %}
+            {% if can_download_job_status(job.metadata.status) %}
             <a class="text-action" href="/jobs/{{ job.job_id }}/download/all">下载</a>
             {% endif %}
-            {% if job.metadata.status in ["failed", "cancelled"] %}
+            {% if can_delete_job_status(job.metadata.status) %}
             <form method="post" action="/jobs/{{ job.job_id }}/delete" onsubmit="return confirm('确定删除这个任务吗？删除后会移除该任务的上传资料、黑板和输出文件，无法恢复。');">
               <button type="submit" class="text-action delete-action">删除</button>
             </form>

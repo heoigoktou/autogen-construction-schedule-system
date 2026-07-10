@@ -4,6 +4,10 @@
   <div>
     <h1>{{ job.metadata.name or ("任务 " ~ job.job_id) }}</h1>
     <div class="muted">任务 ID：{{ job.job_id }} · {{ job.metadata.created_at|date_only }}</div>
+    <form class="rename-form" method="post" action="/jobs/{{ job.job_id }}/rename">
+      <input type="text" name="job_name" value="{{ job.metadata.name or '' }}" maxlength="120" aria-label="任务名称">
+      <button type="submit" class="secondary compact-button">保存名称</button>
+    </form>
   </div>
   <div class="actions">
     <a class="button secondary" href="/jobs/{{ job.job_id }}">刷新状态</a>
@@ -16,16 +20,18 @@
 </div>
 <section class="job-summary">
   <div class="summary-main">
-    <span class="status status-{{ job.metadata.status }}">{{ job.metadata.status }}</span>
+    <span class="status status-{{ job.metadata.status }}">{{ status_label(job.metadata.status) }}</span>
     <div>
       <strong>
-        {% if job.metadata.status == "running" %}任务正在运行{% elif job.metadata.status == "cancelling" %}正在中止任务{% elif job.metadata.status == "succeeded" %}任务已完成{% elif job.metadata.status == "failed" %}任务失败{% elif job.metadata.status == "cancelled" %}任务已中止{% else %}任务待启动{% endif %}
+        {% if job.metadata.status == "running" %}任务正在运行{% elif job.metadata.status == "cancelling" %}正在中止任务{% elif job.metadata.status == "succeeded" %}任务已完成{% elif job.metadata.status == "fallback_review" %}兜底完成，需人工复核{% elif job.metadata.status == "failed" %}任务失败{% elif job.metadata.status == "cancelled" %}任务已中止{% else %}任务待启动{% endif %}
       </strong>
       <p>
         {% if job.metadata.status in ["running", "cancelling"] %}
         当前任务正在占用后台执行器。可以查看日志跟踪进度，必要时中止任务。
         {% elif job.metadata.status == "succeeded" %}
         结果文件已生成，可下载或进入编辑页调整 WBS 和资源后重新计算。
+        {% elif job.metadata.status == "fallback_review" %}
+        本次运行触发了兜底或兜底后恢复重算，产物可下载查看，但不视为正式成功；建议复核 WBS、资源和关键节点，确认无误后重新计算。
         {% elif job.metadata.status == "failed" %}
         任务执行失败，请优先查看日志和错误摘要，调整资料或改用轻量模式后重新运行。
         {% else %}
@@ -53,7 +59,7 @@
 {% endif %}
 {% if job.metadata.result_quality %}
 <div class="notice quality quality-{{ job.metadata.result_quality.level }}">
-  <strong>结果质量：{{ job.metadata.result_quality.level }}</strong>
+  <strong>结果质量：{{ quality_label(job.metadata.result_quality.level) }}</strong>
   <div>{{ job.metadata.result_quality.summary }}</div>
   {% if job.metadata.result_quality.issues %}
   <ul>
@@ -134,7 +140,7 @@
         </label>
       </div>
       <button type="submit" {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
-        {% if job.metadata.status in ["succeeded", "failed", "cancelled"] %}重新运行{% else %}启动运行{% endif %}
+        {% if job.metadata.status in ["succeeded", "failed", "cancelled", "fallback_review"] %}重新运行{% else %}启动运行{% endif %}
       </button>
       {% if job.metadata.status in ["running", "queued", "cancelling"] %}
       <span class="running-hint">任务运行中，请勿重复启动。</span>
@@ -147,6 +153,11 @@
     {% endif %}
     {% if job.metadata.status == "failed" %}
     <div class="next-step">下一步：打开日志查看失败位置，必要时改用轻量模式重新运行。</div>
+    {% endif %}
+    {% if can_delete_job_status(job.metadata.status) %}
+    <form method="post" action="/jobs/{{ job.job_id }}/delete" onsubmit="return confirm('确定删除这个任务吗？删除后会移除该任务的上传资料、黑板和输出文件，无法恢复。');">
+      <button type="submit" class="danger">删除任务</button>
+    </form>
     {% endif %}
   </div>
 

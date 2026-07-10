@@ -252,6 +252,21 @@ def test_fallback_without_preserved_tables_is_marked_incomplete(tmp_path: Path) 
     assert quality["fallback_detected"] is True
 
 
+def test_fallback_restored_quality_uses_review_status() -> None:
+    from webapp import app as webapp_app
+
+    quality = {
+        "level": "restored_after_fallback",
+        "fallback_detected": True,
+    }
+
+    assert webapp_app.final_status_from_quality(quality) == "fallback_review"
+    assert webapp_app.status_label("fallback_review") == "兜底待复核"
+    assert webapp_app.can_delete_job_status("fallback_review") is True
+    assert webapp_app.can_download_job_status("fallback_review") is True
+    assert webapp_app.can_delete_job_status("succeeded") is False
+
+
 def test_default_run_mode_prefers_recalculate_when_tables_exist(tmp_path: Path) -> None:
     from webapp import app as webapp_app
 

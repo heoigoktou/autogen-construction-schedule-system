@@ -594,6 +594,30 @@ input[type="number"],
   color: var(--warn);
 }
 
+.status-fallback_review {
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+
+.rename-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  max-width: 620px;
+}
+
+.rename-form input {
+  min-width: 260px;
+  max-width: 440px;
+  height: 36px;
+}
+
+.rename-form .compact-button {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
 .job-summary {
   display: grid;
   grid-template-columns: minmax(320px, 1.2fr) minmax(420px, 1fr);
@@ -2241,6 +2265,11 @@ input[type="number"],
 .app-body .status-succeeded {
   background: #eaf7ef;
   color: #1f7a3f;
+}
+
+.app-body .status-fallback_review {
+  background: #fff7db;
+  color: #8a5a00;
 }
 
 .app-body .status-failed {

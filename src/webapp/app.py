@@ -54,6 +54,10 @@ from webapp.visual_data import (
 APP_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(APP_DIR / "templates"))
 templates.env.globals["current_user"] = auth.current_user
+templates.env.globals["status_label"] = lambda status: status_label(status)
+templates.env.globals["quality_label"] = lambda level: quality_label(level)
+templates.env.globals["can_delete_job_status"] = lambda status: can_delete_job_status(status)
+templates.env.globals["can_download_job_status"] = lambda status: can_download_job_status(status)
 templates.env.filters["date_only"] = lambda value: date_only(value)
 LOGGER = logging.getLogger(__name__)
 PRESERVE_ON_FALLBACK_SHEETS = (
@@ -65,6 +69,24 @@ PRESERVE_ON_FALLBACK_SHEETS = (
 RUN_MODES = {"standard", "light", "recalculate"}
 MIN_REVIEW_WBS_ROWS = 40
 MIN_REVIEW_RESOURCE_ROWS = 30
+DELETABLE_JOB_STATUSES = {"queued", "failed", "cancelled", "fallback_review"}
+DOWNLOADABLE_JOB_STATUSES = {"succeeded", "fallback_review"}
+STATUS_LABELS = {
+    "queued": "待启动",
+    "running": "运行中",
+    "cancelling": "中止中",
+    "cancelled": "已中止",
+    "succeeded": "成功",
+    "failed": "失败",
+    "fallback_review": "兜底待复核",
+}
+QUALITY_LABELS = {
+    "formal": "正式结果",
+    "recalculated": "重新计算",
+    "needs_review": "需复核",
+    "restored_after_fallback": "兜底后恢复重算",
+    "fallback_incomplete": "兜底不完整",
+}
 
 
 @asynccontextmanager
@@ -420,16 +442,30 @@ def cancel_job(request: Request, job_id: str) -> Response:
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 
+@app.post("/jobs/{job_id}/rename")
+def rename_job(request: Request, job_id: str, job_name: str = Form(...)) -> Response:
+    guard = auth.require_login(request)
+    if isinstance(guard, Response):
+        return guard
+    job = load_job(PROJECT_ROOT, job_id)
+    cleaned = " ".join(str(job_name or "").split())[:120]
+    if not cleaned:
+        update_job_metadata(job.context, error_summary="任务名称不能为空。")
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+    update_job_metadata(job.context, name=cleaned, error_summary="")
+    return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+
 @app.post("/jobs/{job_id}/delete")
 def delete_failed_or_cancelled_job(request: Request, job_id: str) -> Response:
     guard = auth.require_login(request)
     if isinstance(guard, Response):
         return guard
     job = load_job(PROJECT_ROOT, job_id)
-    if job.metadata.get("status") not in {"failed", "cancelled"}:
+    if not can_delete_job_status(str(job.metadata.get("status") or "")):
         update_job_metadata(
             job.context,
-            error_summary="只能删除失败或已取消的任务。",
+            error_summary="只能删除待启动、失败、已中止或兜底待复核的任务。",
         )
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
     delete_job(PROJECT_ROOT, job_id)
@@ -722,7 +758,7 @@ def _run_job_worker(
             name=str(job.metadata.get("run_scenario_name") or "") or f"运行结果 {now_iso().replace('T', ' ')[:19]}",
             kind="adjusted",
         )
-        final_status = "failed" if quality.get("level") == "fallback_incomplete" else "succeeded"
+        final_status = final_status_from_quality(quality)
         error_summary = quality.get("summary", "") if final_status == "failed" else ""
         update_job_metadata(
             job.context,
@@ -856,6 +892,30 @@ def assess_result_quality(
         "fallback_detected": fallback,
         "restored_tables": restored_tables,
     }
+
+
+def final_status_from_quality(quality: dict[str, Any]) -> str:
+    if quality.get("level") == "fallback_incomplete":
+        return "failed"
+    if quality.get("fallback_detected"):
+        return "fallback_review"
+    return "succeeded"
+
+
+def status_label(status: Any) -> str:
+    return STATUS_LABELS.get(str(status or ""), str(status or "未知"))
+
+
+def quality_label(level: Any) -> str:
+    return QUALITY_LABELS.get(str(level or ""), str(level or "未知"))
+
+
+def can_delete_job_status(status: Any) -> bool:
+    return str(status or "") in DELETABLE_JOB_STATUSES
+
+
+def can_download_job_status(status: Any) -> bool:
+    return str(status or "") in DOWNLOADABLE_JOB_STATUSES
 
 
 def job_table_counts(store: ExcelBlackboardStore) -> dict[str, int]:
