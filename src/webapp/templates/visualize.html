@@ -72,6 +72,21 @@
     <span class="muted" id="resourceHint">按筛选或所选工序显示资源需求与能力。</span>
   </div>
   <div id="resourceChart" class="viz-chart resource-chart"></div>
+  <div class="resource-atlas-section">
+    <div class="resource-atlas-head">
+      <div>
+        <h3>资源负荷图谱</h3>
+        <span class="muted" id="resourceAtlasHint">按日期查看资源负荷趋势。</span>
+      </div>
+      <div class="resource-atlas-controls" id="resourceAtlasControls" aria-label="资源负荷图谱视图">
+        <button type="button" class="tool-chip active" data-atlas-mode="demand">需求堆叠</button>
+        <button type="button" class="tool-chip" data-atlas-mode="rate">负荷率</button>
+        <button type="button" class="tool-chip" data-atlas-mode="conflict">冲突点</button>
+      </div>
+    </div>
+    <div id="resourceAtlasMetrics" class="resource-atlas-metrics"></div>
+    <div id="resourceAtlasChart" class="viz-chart resource-atlas-chart"></div>
+  </div>
 </section>
 
 <section class="viz-grid">
@@ -108,12 +123,15 @@
   const jobId = "{{ job.job_id }}";
   const ganttEl = document.getElementById("ganttChart");
   const resourceEl = document.getElementById("resourceChart");
+  const resourceAtlasEl = document.getElementById("resourceAtlasChart");
   const ganttChart = echarts.init(ganttEl);
   const resourceChart = echarts.init(resourceEl);
+  const resourceAtlasChart = echarts.init(resourceAtlasEl);
   const dayMs = 24 * 60 * 60 * 1000;
   let payload = null;
   let selectedTaskId = "";
   let filteredTasks = [];
+  let resourceAtlasMode = "demand";
 
   const controls = {
     phase: document.getElementById("phaseFilter"),
@@ -139,6 +157,16 @@
       selectedTaskId = "";
       renderAll();
     });
+  });
+
+  document.getElementById("resourceAtlasControls").addEventListener("click", event => {
+    const button = event.target.closest("[data-atlas-mode]");
+    if (!button) return;
+    resourceAtlasMode = button.dataset.atlasMode || "demand";
+    document.querySelectorAll("#resourceAtlasControls [data-atlas-mode]").forEach(item => {
+      item.classList.toggle("active", item === button);
+    });
+    renderResourceAtlas();
   });
 
   document.getElementById("exportImageBtn").addEventListener("click", () => {
@@ -182,9 +210,19 @@
     renderResourceChart();
   });
 
+  resourceChart.on("click", params => {
+    if (!params.name) return;
+    const option = Array.from(controls.resource.options).find(item => item.value === params.name);
+    if (!option) return;
+    controls.resource.value = params.name;
+    selectedTaskId = "";
+    renderAll();
+  });
+
   window.addEventListener("resize", () => {
     ganttChart.resize();
     resourceChart.resize();
+    resourceAtlasChart.resize();
   });
 
   function renderAll(sourceText) {
@@ -193,6 +231,7 @@
     renderMetrics();
     renderGantt();
     renderResourceChart();
+    renderResourceAtlas();
     renderTaskDetail();
     renderComparison();
     renderMilestones();
@@ -362,6 +401,189 @@
       ],
     }, true);
     document.getElementById("resourceHint").textContent = "当前显示：资源需求汇总 Top 15";
+  }
+
+  function renderResourceAtlas() {
+    const rows = (payload.resource_load || []).filter(row => row.date_or_period && row.resource_name);
+    const hint = document.getElementById("resourceAtlasHint");
+    const metrics = document.getElementById("resourceAtlasMetrics");
+    if (!rows.length) {
+      resourceAtlasChart.clear();
+      metrics.innerHTML = "";
+      hint.textContent = "暂无资源负荷数据。";
+      return;
+    }
+
+    const selectedResource = controls.resource.value;
+    const visibleRows = selectedResource ? rows.filter(row => row.resource_name === selectedResource) : rows;
+    const resourceNames = selectedResource ? [selectedResource] : topResourceNames(visibleRows, 8);
+    const dates = unique(visibleRows.map(row => row.date_or_period)).sort((a, b) => parseDate(a) - parseDate(b));
+    const rowsByKey = new Map();
+    for (const row of visibleRows) {
+      const key = `${row.resource_name}__${row.date_or_period}`;
+      const item = rowsByKey.get(key) || { demand: 0, capacity: 0, conflict: false, tasks: new Set() };
+      item.demand += Number(row.demand || 0);
+      item.capacity = Math.max(item.capacity, Number(row.capacity || 0));
+      item.conflict = item.conflict || !!row.conflict_flag || Number(row.demand || 0) > Number(row.capacity || 0);
+      String(row.related_tasks || "").split(",").map(text => text.trim()).filter(Boolean).forEach(task => item.tasks.add(task));
+      rowsByKey.set(key, item);
+    }
+
+    const totals = dates.map(date => resourceNames.reduce((sum, name) => {
+      const item = rowsByKey.get(`${name}__${date}`);
+      return sum + (item ? item.demand : 0);
+    }, 0));
+    const peakIndex = totals.length ? totals.indexOf(Math.max(...totals)) : -1;
+    const peakDate = peakIndex >= 0 ? dates[peakIndex] : "-";
+    const peakValue = peakIndex >= 0 ? totals[peakIndex] : 0;
+    const conflictCount = visibleRows.filter(row => row.conflict_flag || Number(row.demand || 0) > Number(row.capacity || 0)).length;
+    const totalDemand = visibleRows.reduce((sum, row) => sum + Number(row.demand || 0), 0);
+    metrics.innerHTML = [
+      atlasMetric("展示资源", resourceNames.length),
+      atlasMetric("峰值日期", peakDate),
+      atlasMetric("峰值需求", roundNumber(peakValue)),
+      atlasMetric("冲突记录", conflictCount),
+      atlasMetric("累计需求", roundNumber(totalDemand)),
+    ].join("");
+
+    const palette = ["#2563eb", "#16a34a", "#7c3aed", "#f59e0b", "#06b6d4", "#ef4444", "#0d9488", "#9333ea"];
+    const series = [];
+    if (resourceAtlasMode === "demand") {
+      resourceNames.forEach((name, index) => {
+        series.push({
+          name,
+          type: "line",
+          stack: "demand",
+          smooth: true,
+          showSymbol: false,
+          areaStyle: { opacity: 0.58 },
+          lineStyle: { width: 2 },
+          itemStyle: { color: palette[index % palette.length] },
+          emphasis: { focus: "series" },
+          data: dates.map(date => rowsByKey.get(`${name}__${date}`)?.demand || 0),
+        });
+      });
+    } else if (resourceAtlasMode === "rate") {
+      resourceNames.forEach((name, index) => {
+        series.push({
+          name,
+          type: "line",
+          smooth: true,
+          showSymbol: false,
+          lineStyle: { width: 3 },
+          itemStyle: { color: palette[index % palette.length] },
+          data: dates.map(date => {
+            const item = rowsByKey.get(`${name}__${date}`);
+            return item && item.capacity ? Number(((item.demand / item.capacity) * 100).toFixed(1)) : 0;
+          }),
+        });
+      });
+    } else {
+      series.push({
+        name: "冲突点",
+        type: "scatter",
+        symbolSize: value => Math.max(10, Math.min(28, Math.sqrt(Number(value[1] || 0)) * 2.6)),
+        itemStyle: { color: "#dc2626" },
+        data: [],
+      });
+      for (const name of resourceNames) {
+        for (const date of dates) {
+          const item = rowsByKey.get(`${name}__${date}`);
+          if (item && item.conflict) {
+            series[0].data.push({ value: [date, item.demand], resource: name, tasks: Array.from(item.tasks) });
+          }
+        }
+      }
+    }
+
+    const yName = resourceAtlasMode === "rate" ? "负荷率 %" : "需求";
+    const titleText = selectedResource ? `当前聚焦：${selectedResource}` : `当前显示：需求最高 Top ${resourceNames.length}`;
+    hint.textContent = resourceAtlasMode === "conflict" ? `${titleText} · 红点表示需求超过能力。` : titleText;
+    resourceAtlasEl.style.height = "430px";
+    resourceAtlasChart.resize();
+    resourceAtlasChart.setOption({
+      animation: false,
+      color: palette,
+      legend: {
+        type: "scroll",
+        top: 8,
+        left: 12,
+        right: 12,
+      },
+      tooltip: {
+        trigger: resourceAtlasMode === "conflict" ? "item" : "axis",
+        axisPointer: { type: "cross" },
+        formatter: params => formatAtlasTooltip(Array.isArray(params) ? params : [params], rowsByKey),
+      },
+      grid: { left: 58, right: 34, top: 58, bottom: 74 },
+      dataZoom: [
+        { type: "slider", xAxisIndex: 0, height: 22, bottom: 26 },
+        { type: "inside", xAxisIndex: 0 },
+      ],
+      xAxis: {
+        type: resourceAtlasMode === "conflict" ? "time" : "category",
+        data: resourceAtlasMode === "conflict" ? undefined : dates,
+        axisLabel: { color: "#64748b", hideOverlap: true },
+        splitLine: { show: true, lineStyle: { color: "#eef2f7" } },
+      },
+      yAxis: {
+        type: "value",
+        name: yName,
+        axisLabel: {
+          color: "#64748b",
+          formatter: value => resourceAtlasMode === "rate" ? `${value}%` : value,
+        },
+        splitLine: { lineStyle: { color: "#e7edf5" } },
+      },
+      series,
+    }, true);
+  }
+
+  function topResourceNames(rows, limit) {
+    const totals = new Map();
+    for (const row of rows) {
+      const name = row.resource_name || row.resource_type || "资源";
+      totals.set(name, (totals.get(name) || 0) + Number(row.demand || 0));
+    }
+    return Array.from(totals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(item => item[0]);
+  }
+
+  function atlasMetric(label, value) {
+    return `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`;
+  }
+
+  function roundNumber(value) {
+    const number = Number(value || 0);
+    if (Math.abs(number) >= 100) return Math.round(number);
+    if (Number.isInteger(number)) return number;
+    return Number(number.toFixed(1));
+  }
+
+  function formatAtlasTooltip(params, rowsByKey) {
+    if (!params.length) return "";
+    const first = params[0];
+    if (resourceAtlasMode === "conflict") {
+      const data = first.data || {};
+      const date = Array.isArray(data.value) ? dateOnly(data.value[0]) : first.name;
+      const tasks = data.tasks && data.tasks.length ? `<br>关联工序：${escapeHtml(data.tasks.slice(0, 6).join(", "))}` : "";
+      return `<strong>${escapeHtml(data.resource || "资源")}</strong><br>${escapeHtml(date)}<br>需求：${roundNumber(data.value?.[1] || 0)}${tasks}`;
+    }
+    const date = first.axisValue || first.name;
+    const rows = params
+      .filter(item => item.value !== null && item.value !== undefined && Number(item.value) !== 0)
+      .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
+      .slice(0, 12);
+    const lines = rows.map(item => {
+      const source = rowsByKey.get(`${item.seriesName}__${date}`);
+      const capacity = source && source.capacity ? ` / 能力 ${roundNumber(source.capacity)}` : "";
+      const suffix = resourceAtlasMode === "rate" ? "%" : "";
+      return `${item.marker}${escapeHtml(item.seriesName)}：${roundNumber(item.value)}${suffix}${capacity}`;
+    });
+    const total = rows.reduce((sum, item) => sum + Number(item.value || 0), 0);
+    return `<strong>${escapeHtml(date)}</strong><br>${lines.join("<br>")}${resourceAtlasMode === "demand" ? `<br>合计：${roundNumber(total)}` : ""}`;
   }
 
   function renderTaskDetail() {
