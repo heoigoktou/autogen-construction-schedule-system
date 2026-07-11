@@ -457,3 +457,27 @@ def test_recalculate_worker_skips_model_workflow(tmp_path: Path, monkeypatch: py
     assert calls == ["recalculate"]
     assert reloaded.metadata["status"] == "succeeded"
     assert reloaded.metadata["result_quality"]["level"] == "recalculated"
+
+
+def test_recalculate_quality_ignores_historical_fallback_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from webapp import app as webapp_app
+
+    store = ExcelBlackboardStore(tmp_path / "blackboard.xlsx")
+    store.initialize()
+    store.replace_rows("wbs_tasks_final", minimal_wbs_rows())
+    store.replace_rows("resource_plan_final", minimal_resource_rows())
+    monkeypatch.setattr(webapp_app, "fallback_result_detected", lambda _store: True)
+
+    quality = webapp_app.assess_result_quality(
+        store,
+        {"schedule_initial": 3},
+        {},
+        run_mode="recalculate",
+    )
+
+    assert quality["level"] == "recalculated"
+    assert quality["fallback_detected"] is False
+    assert quality["historical_fallback_detected"] is True

@@ -938,7 +938,8 @@ def assess_result_quality(
     run_mode: str,
 ) -> dict[str, Any]:
     table_counts = job_table_counts(store)
-    fallback = fallback_result_detected(store)
+    historical_fallback = fallback_result_detected(store)
+    fallback = historical_fallback and run_mode != "recalculate"
     issues: list[str] = []
     if table_counts["wbs_tasks_final"] == 0:
         issues.append("WBS is empty.")
@@ -973,6 +974,7 @@ def assess_result_quality(
         "issues": issues,
         "table_counts": table_counts,
         "fallback_detected": fallback,
+        "historical_fallback_detected": historical_fallback,
         "restored_tables": restored_tables,
     }
 
