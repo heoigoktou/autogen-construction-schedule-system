@@ -43,6 +43,14 @@ from webapp.services import (
     list_existing_artifacts,
     recalculate_blackboard_outputs,
 )
+from webapp.tool_agent_audit import (
+    record_job_end_audit,
+    record_model_workflow_audit,
+    record_preprocess_audit,
+    record_recalculation_audit,
+    record_restore_audit,
+    record_table_snapshot_audit,
+)
 from webapp.visual_data import (
     VISUAL_EXPORTS,
     build_visual_payload,
@@ -612,6 +620,11 @@ def recalculate_job(request: Request, job_id: str, scenario_name: str = Form("")
     job = load_job(PROJECT_ROOT, job_id)
     store = ExcelBlackboardStore(job.context.blackboard_path)
     try:
+        record_table_snapshot_audit(
+            job.context,
+            phase="manual_recalculate_before",
+            table_counts=job_table_counts(store),
+        )
         result = recalculate_blackboard_outputs(store, job.context.outputs_root, title=f"Web Job {job_id}")
         scenario = save_scenario_snapshot(
             store,
@@ -619,7 +632,21 @@ def recalculate_job(request: Request, job_id: str, scenario_name: str = Form("")
             name=scenario_name or f"重新计算 {now_iso().replace('T', ' ')[:19]}",
             kind="adjusted",
         )
+        quality = assess_result_quality(store, result, {}, run_mode="recalculate")
+        record_recalculation_audit(
+            job.context,
+            counts=result,
+            scenario=scenario,
+            quality=quality,
+            run_mode="recalculate",
+        )
     except Exception as exc:
+        record_job_end_audit(
+            job.context,
+            status="failed",
+            summary="手动重新计算失败，已保留原黑板数据供检查。",
+            details={"error": str(exc)[:1000]},
+        )
         update_job_metadata(job.context, error_summary=str(exc))
         return RedirectResponse(f"/jobs/{job_id}/edit", status_code=303)
     update_job_metadata(
@@ -628,6 +655,7 @@ def recalculate_job(request: Request, job_id: str, scenario_name: str = Form("")
         last_recalculated_at=now_iso(),
         last_recalculate_counts=result,
         last_scenario_snapshot=scenario,
+        result_quality=quality,
         error_summary="",
     )
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
@@ -694,11 +722,17 @@ def _run_job_worker(
             preprocessed_at=now_iso(),
             preprocess_summary=preprocess_result.package.get("summary") or {},
         )
+        record_preprocess_audit(job.context, preprocess_result.package)
         if cancel_event.is_set():
             raise RuntimeError("Job cancelled by user.")
         job = load_job(PROJECT_ROOT, job_id)
         store = ExcelBlackboardStore(job.context.blackboard_path)
         store.initialize()
+        record_table_snapshot_audit(
+            job.context,
+            phase="before_run",
+            table_counts=job_table_counts(store),
+        )
         preserved_tables = snapshot_preserved_tables(store)
         if str(job.metadata.get("run_mode") or "") == "recalculate":
             counts = recalculate_blackboard_outputs(
@@ -713,6 +747,13 @@ def _run_job_worker(
                 kind="adjusted",
             )
             quality = assess_result_quality(store, counts, {}, run_mode="recalculate")
+            record_recalculation_audit(
+                job.context,
+                counts=counts,
+                scenario=scenario,
+                quality=quality,
+                run_mode="recalculate",
+            )
             update_job_metadata(
                 job.context,
                 status="succeeded",
@@ -728,7 +769,19 @@ def _run_job_worker(
                     "mode": "recalculate",
                 },
             )
+            record_job_end_audit(
+                job.context,
+                status="succeeded",
+                summary="重新计算任务完成；本次未调用大模型。",
+                details={"run_mode": "recalculate", "quality_level": quality.get("level")},
+            )
             return
+        record_model_workflow_audit(
+            job.context,
+            run_mode=str(job.metadata.get("run_mode") or "standard"),
+            status="started",
+            summary="启动真实 AutoGen AgentChat 阶段，后续结果仍需通过黑板校验和确定性重算。",
+        )
         result = run_real_case_workflow(
             context=job.context,
             project_root=PROJECT_ROOT,
@@ -736,9 +789,20 @@ def _run_job_worker(
             cancel_checker=cancel_event.is_set,
             run_mode=str(job.metadata.get("run_mode") or "standard"),
         )
+        record_model_workflow_audit(
+            job.context,
+            run_mode=str(job.metadata.get("run_mode") or "standard"),
+            status="completed",
+            summary="AgentChat 阶段返回结果，进入黑板恢复、重算和质量复核。",
+            details={
+                "output_dir": str(result.get("output_dir", "")),
+                "blackboard": str(result.get("blackboard", "")),
+            },
+        )
         if cancel_event.is_set():
             raise RuntimeError("Job cancelled by user.")
         restored_tables = restore_preserved_tables_after_fallback(store, preserved_tables)
+        record_restore_audit(job.context, restored_tables)
         counts = recalculate_blackboard_outputs(
             store,
             job.context.outputs_root,
@@ -758,6 +822,13 @@ def _run_job_worker(
             name=str(job.metadata.get("run_scenario_name") or "") or f"运行结果 {now_iso().replace('T', ' ')[:19]}",
             kind="adjusted",
         )
+        record_recalculation_audit(
+            job.context,
+            counts=counts,
+            scenario=scenario,
+            quality=quality,
+            run_mode=str(job.metadata.get("run_mode") or "standard"),
+        )
         final_status = final_status_from_quality(quality)
         error_summary = quality.get("summary", "") if final_status == "failed" else ""
         update_job_metadata(
@@ -775,11 +846,23 @@ def _run_job_worker(
                 "blackboard": str(result["blackboard"]),
             },
         )
+        record_job_end_audit(
+            job.context,
+            status=final_status,
+            summary=str(quality.get("summary") or "任务完成。"),
+            details={"run_mode": str(job.metadata.get("run_mode") or "standard")},
+        )
     except Exception as exc:
         cancelled = cancel_event.is_set() or "cancelled" in str(exc).lower()
         LOGGER.exception("Web job %s %s", job_id, "cancelled" if cancelled else "failed")
         try:
             job = load_job(PROJECT_ROOT, job_id)
+            record_job_end_audit(
+                job.context,
+                status="cancelled" if cancelled else "failed",
+                summary="任务已中止。" if cancelled else "任务运行失败。",
+                details={"error": str(exc)[:1000]},
+            )
             update_job_metadata(
                 job.context,
                 status="cancelled" if cancelled else "failed",
@@ -1024,7 +1107,7 @@ def group_artifacts(artifacts: list[dict[str, str]]) -> list[dict[str, Any]]:
             {"resources", "resource_load", "resource_load_json", "resource_resolution", "milestones", "milestones_json", "constraints", "adjustments_json"},
         ),
         ("preprocess", "资料预处理", {"preprocess_json", "preprocess_markdown"}),
-        ("report", "图表与报告", {"summary", "visual_report", "gantt", "cpm_network", "cpm_float", "resource_heatmap"}),
+        ("report", "图表与报告", {"summary", "tool_agent_audit", "visual_report", "gantt", "cpm_network", "cpm_float", "resource_heatmap"}),
     ]
     by_key = {item["key"]: item for item in artifacts}
     grouped = []

@@ -20,6 +20,7 @@ from tools.schedule_tools import (
 )
 from tools.visualization_tools import DEFAULT_OUTPUT_DIRNAME, generate_schedule_visualizations
 from webapp.preprocess import PREPROCESS_DIRNAME, PREPROCESS_JSON, PREPROCESS_MARKDOWN
+from webapp.tool_agent_audit import AUDIT_FILENAME
 from webapp.visual_data import VISUAL_EXPORTS, export_visual_json_artifacts
 
 
@@ -36,6 +37,7 @@ EXPORT_FILES = {
     "constraints": "constraint_check.xlsx",
     "network_diagram": "network_diagram.md",
     "summary": "initial_schedule_summary.md",
+    "tool_agent_audit": AUDIT_FILENAME,
     "visual_report": f"{DEFAULT_OUTPUT_DIRNAME}/schedule_visualization_report.md",
     "gantt": f"{DEFAULT_OUTPUT_DIRNAME}/gantt_chart.png",
     "cpm_network": f"{DEFAULT_OUTPUT_DIRNAME}/cpm_network.png",
@@ -180,7 +182,7 @@ def artifact_path(outputs_root: Path, artifact: str, blackboard_path: Path) -> P
     relative = EXPORT_FILES.get(artifact)
     if not relative:
         raise KeyError(artifact)
-    if artifact in {"summary"}:
+    if artifact in {"summary", "tool_agent_audit"}:
         return outputs_root / "report_assets" / relative
     if artifact in {"preprocess_json", "preprocess_markdown"}:
         return outputs_root / relative
@@ -228,6 +230,7 @@ def list_existing_artifacts(outputs_root: Path, blackboard_path: Path) -> list[d
         "constraints": "约束检查 Excel",
         "network_diagram": "网络图 Markdown",
         "summary": "排程摘要 Markdown",
+        "tool_agent_audit": "Tool Agent 审计 JSON",
         "visual_report": "图表报告 Markdown",
         "gantt": "甘特图",
         "cpm_network": "CPM 网络图",

@@ -23,6 +23,7 @@ from webapp.editors import save_resource_rows, save_wbs_rows
 from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
 from webapp.preprocess import build_readiness, preprocess_job_documents
 from webapp.services import artifact_path, list_existing_artifacts, recalculate_blackboard_outputs
+from webapp.tool_agent_audit import AUDIT_FILENAME, record_audit_event
 
 
 def test_web_case_context_is_job_scoped(tmp_path: Path) -> None:
@@ -55,6 +56,27 @@ def test_password_hash_verification() -> None:
 
     assert verify_password("secret", password_hash)
     assert not verify_password("wrong", password_hash)
+
+
+def test_tool_agent_audit_is_written_and_downloadable(tmp_path: Path) -> None:
+    context = resolve_web_case_context(tmp_path, job_id="job-audit")
+
+    record_audit_event(
+        context,
+        agent="ScheduleAgent",
+        action="build_initial_schedule",
+        summary="pytest audit event",
+        details={"schedule_initial": 3},
+    )
+
+    audit_path = artifact_path(context.outputs_root, "tool_agent_audit", context.blackboard_path)
+    artifacts = list_existing_artifacts(context.outputs_root, context.blackboard_path)
+
+    assert audit_path.name == AUDIT_FILENAME
+    assert audit_path.exists()
+    assert "ScheduleAgent" in audit_path.read_text(encoding="utf-8")
+    assert "ScheduleAgent" in context.runtime_log.read_text(encoding="utf-8")
+    assert any(item["key"] == "tool_agent_audit" for item in artifacts)
 
 
 def test_wbs_and_resource_edit_validation(tmp_path: Path) -> None:
