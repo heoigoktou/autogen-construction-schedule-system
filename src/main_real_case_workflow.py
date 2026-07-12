@@ -13,6 +13,7 @@ import argparse
 import logging
 from datetime import date
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from agentchat_runtime.workflow import AgentChatWorkflow
@@ -71,22 +72,31 @@ def setup_logging(runtime_log: Path) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
         handlers=[logging.FileHandler(runtime_log, encoding="utf-8"), logging.StreamHandler()],
+        force=True,
     )
     for noisy_logger in ("autogen_core", "autogen_core.events", "openai", "httpx"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
 
-def main() -> None:
-    args = parse_args()
-    context = resolve_case_context(
-        PROJECT_ROOT,
-        input_dir=args.input_dir,
-    )
+def run_real_case_workflow(
+    *,
+    context,
+    project_root: Path = PROJECT_ROOT,
+    archive: bool = True,
+    install_oda_if_missing: bool = False,
+    dwg_timeout_seconds: int = 120,
+    skip_visualizations: bool = False,
+    cancel_checker: Callable[[], bool] | None = None,
+    run_mode: str = "standard",
+) -> dict[str, Any]:
+    """Run the real-case workflow for CLI or Web callers."""
+
     ensure_case_directories(context)
-    archive_result = None if args.no_archive else archive_case_state(context)
+    archive_result = archive_case_state(context) if archive else None
 
     setup_logging(context.runtime_log)
-    model_settings = build_model_settings(PROJECT_ROOT)
+    model_settings = build_model_settings(project_root)
+    model_settings.update(_agentchat_mode_overrides(run_mode))
 
     store = ExcelBlackboardStore(context.blackboard_path)
     store.initialize()
@@ -95,13 +105,15 @@ def main() -> None:
     documents = read_source_documents(
         source_docs_dir,
         dwg_conversion_dir=str(context.tmp_dir / "dwg_conversion"),
-        install_oda_if_missing=args.install_oda_if_missing,
-        dwg_timeout_seconds=args.dwg_timeout_seconds,
+        install_oda_if_missing=install_oda_if_missing,
+        dwg_timeout_seconds=dwg_timeout_seconds,
     )
     agentchat_result = AgentChatWorkflow(
         store=store,
         model_settings=model_settings,
         documents=documents,
+        max_messages=int(model_settings.get("agentchat_max_messages") or 140),
+        cancel_checker=cancel_checker,
     ).run().to_dict()
 
     wbs_rows = store.read_rows("wbs_tasks_final")
@@ -162,7 +174,7 @@ def main() -> None:
         milestone_rows,
     )
     visualization_result = None
-    if not args.skip_visualizations:
+    if not skip_visualizations:
         visualization_result = generate_schedule_visualizations(
             store,
             context.outputs_root / DEFAULT_OUTPUT_DIRNAME,
@@ -175,6 +187,7 @@ def main() -> None:
             "source_docs_dir": source_docs_dir,
             "blackboard": context.blackboard_path,
             "model_provider": model_settings.get("provider"),
+            "run_mode": run_mode,
             "model_enabled": True,
             "start_date": start_date.isoformat(),
             "archive_result": archive_result,
@@ -190,9 +203,34 @@ def main() -> None:
         },
     )
 
-    print(f"real case workflow completed: {real_case_dir}")
-    if visualization_result is not None:
-        print(f"visualizations completed: {visualization_result.output_dir}")
+    return {
+        "case_id": context.case_id,
+        "source_docs_dir": source_docs_dir,
+        "blackboard": context.blackboard_path,
+        "output_dir": real_case_dir,
+        "agentchat_result": agentchat_result,
+        "visualization_result": visualization_result,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    context = resolve_case_context(
+        PROJECT_ROOT,
+        input_dir=args.input_dir,
+    )
+    result = run_real_case_workflow(
+        context=context,
+        project_root=PROJECT_ROOT,
+        archive=not args.no_archive,
+        install_oda_if_missing=args.install_oda_if_missing,
+        dwg_timeout_seconds=args.dwg_timeout_seconds,
+        skip_visualizations=args.skip_visualizations,
+    )
+
+    print(f"real case workflow completed: {result['output_dir']}")
+    if result["visualization_result"] is not None:
+        print(f"visualizations completed: {result['visualization_result'].output_dir}")
 
 
 def _project_start_date(project_parameters: list[dict[str, Any]]) -> date:
@@ -206,6 +244,24 @@ def _project_start_date(project_parameters: list[dict[str, Any]]) -> date:
                 return parsed
             raise RuntimeError(f"开工日期 P-002 非法：{row.get('value')}")
     raise RuntimeError("缺少真实开工日期 P-002，禁止使用默认开工日期。")
+
+
+def _agentchat_mode_overrides(run_mode: str) -> dict[str, Any]:
+    if run_mode != "light":
+        return {"agentchat_run_mode": "standard"}
+    return {
+        "agentchat_run_mode": "light",
+        "agentchat_max_messages": 60,
+        "agentchat_max_turns": 12,
+        "agentchat_source_chars": 5000,
+        "agentchat_context_chars": 1800,
+        "agentchat_default_context_chars": 1200,
+        "agentchat_evidence_rows": 30,
+        "agentchat_max_evidence_rows": 50,
+        "agentchat_tool_iterations": 2,
+        "repeated_validation_error_limit": 1,
+        "team_run_timeout_seconds": 900,
+    }
 
 
 def _parse_date(value: str) -> date | None:

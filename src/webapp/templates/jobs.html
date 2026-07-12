@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block content %}
+{% set ns = namespace(running=0, succeeded=0, failed=0, cancelled=0, warning=0) %}
+{% for job in jobs %}
+  {% if job.metadata.status == "running" or job.metadata.status == "queued" or job.metadata.status == "cancelling" %}
+    {% set ns.running = ns.running + 1 %}
+  {% elif job.metadata.status == "succeeded" %}
+    {% set ns.succeeded = ns.succeeded + 1 %}
+  {% elif job.metadata.status == "failed" %}
+    {% set ns.failed = ns.failed + 1 %}
+  {% elif job.metadata.status == "cancelled" %}
+    {% set ns.cancelled = ns.cancelled + 1 %}
+  {% endif %}
+  {% if job.metadata.preflight_warnings %}
+    {% set ns.warning = ns.warning + 1 %}
+  {% endif %}
+{% endfor %}
+<div class="page-head">
+  <div>
+    <h1>任务列表</h1>
+    <div class="muted">统一管理项目资料、Agent 运行任务、排程结果和调整记录。</div>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="/jobs">刷新</a>
+    <a class="button" href="/jobs/new">新建任务</a>
+  </div>
+</div>
+
+<section class="dashboard-cards">
+  <div class="stat-card stat-running">
+    <div class="stat-card-head">
+      <span>运行中</span>
+      <svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2-7 4 14 2-7h6"/></svg>
+    </div>
+    <strong>{{ ns.running }}</strong>
+  </div>
+  <div class="stat-card stat-success">
+    <div class="stat-card-head">
+      <span>成功完成</span>
+      <svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.2 2.2 2.2 4.8-5"/></svg>
+    </div>
+    <strong>{{ ns.succeeded }}</strong>
+  </div>
+  <div class="stat-card stat-warning">
+    <div class="stat-card-head">
+      <span>风险警告</span>
+      <svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 22 20H2L12 3Z"/><path d="M12 9v5"/><path d="M12 17h.01"/></svg>
+    </div>
+    <strong>{{ ns.warning }}</strong>
+  </div>
+  <div class="stat-card stat-failed">
+    <div class="stat-card-head">
+      <span>失败/中止</span>
+      <svg class="stat-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6"/><path d="m15 9-6 6"/></svg>
+    </div>
+    <strong>{{ ns.failed + ns.cancelled }}</strong>
+  </div>
+</section>
+
+<section class="panel-section">
+  <div class="section-head">
+    <div>
+      <h2>排程任务列表</h2>
+      <p class="muted">按创建时间查看历史任务，进入详情后可运行、编辑、下载或查看日志。</p>
+    </div>
+    <div class="table-tools" id="jobFilters">
+      <button type="button" class="tool-chip active" data-status-filter="">全部</button>
+      <button type="button" class="tool-chip" data-status-filter="running,queued,cancelling">运行中</button>
+      <button type="button" class="tool-chip" data-status-filter="succeeded">成功</button>
+      <button type="button" class="tool-chip" data-status-filter="failed,cancelled">失败/中止</button>
+      <button type="button" class="tool-chip" data-date-filter="week">本周</button>
+    </div>
+  </div>
+  <div class="table-wrap job-table-wrap">
+  <table class="data-table job-table">
+    <thead>
+      <tr>
+        <th>任务名称</th>
+        <th>状态</th>
+        <th>创建时间</th>
+        <th>开始</th>
+        <th>结束</th>
+        <th>资料数</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr data-job-row data-status="{{ job.metadata.status }}" data-created="{{ job.metadata.created_at }}" data-search="{{ job.metadata.name or '' }} {{ job.job_id }} {{ job.metadata.status }} {{ job.metadata.created_at }} {{ job.metadata.started_at or '' }} {{ job.metadata.finished_at or '' }}">
+        <td class="job-name-cell">
+          <a href="/jobs/{{ job.job_id }}">{{ job.metadata.name or job.job_id }}</a>
+          <span class="mono-cell">{{ job.job_id }}</span>
+        </td>
+        <td><span class="status status-{{ job.metadata.status }}">{{ job.metadata.status }}</span></td>
+        <td>{{ job.metadata.created_at|date_only }}</td>
+        <td>{{ job.metadata.started_at|date_only }}</td>
+        <td>{{ job.metadata.finished_at|date_only }}</td>
+        <td>{{ job.metadata.uploads|length }}</td>
+        <td>
+          <div class="row-actions">
+            <a class="text-action" href="/jobs/{{ job.job_id }}">查看</a>
+            <a class="text-action" href="/jobs/{{ job.job_id }}/logs">日志</a>
+            {% if job.metadata.status == "succeeded" %}
+            <a class="text-action" href="/jobs/{{ job.job_id }}/download/all">下载</a>
+            {% endif %}
+            {% if job.metadata.status in ["failed", "cancelled"] %}
+            <form method="post" action="/jobs/{{ job.job_id }}/delete" onsubmit="return confirm('确定删除这个任务吗？删除后会移除该任务的上传资料、黑板和输出文件，无法恢复。');">
+              <button type="submit" class="text-action delete-action">删除</button>
+            </form>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">暂无任务。</td></tr>
+      {% endfor %}
+      <tr id="filteredEmptyRow" hidden><td colspan="7" class="empty">没有符合筛选条件的任务。</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+<script>
+(() => {
+  const rows = Array.from(document.querySelectorAll("[data-job-row]"));
+  const filters = document.getElementById("jobFilters");
+  const emptyRow = document.getElementById("filteredEmptyRow");
+  const search = document.getElementById("globalSearchInput");
+  let statusFilter = "";
+  let weekOnly = false;
+
+  function inThisWeek(value) {
+    const time = Date.parse(String(value || "").replace(/\//g, "-"));
+    if (!Number.isFinite(time)) return false;
+    const now = new Date();
+    const day = now.getDay() || 7;
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
+    return time >= monday.getTime();
+  }
+
+  function applyFilters() {
+    const text = (search && search.value || "").trim().toLowerCase();
+    const allowed = statusFilter ? statusFilter.split(",") : [];
+    let shown = 0;
+    rows.forEach(row => {
+      const statusOk = !allowed.length || allowed.includes(row.dataset.status);
+      const weekOk = !weekOnly || inThisWeek(row.dataset.created);
+      const textOk = !text || row.dataset.search.toLowerCase().includes(text);
+      const visible = statusOk && weekOk && textOk;
+      row.hidden = !visible;
+      if (visible) shown += 1;
+    });
+    if (emptyRow) emptyRow.hidden = shown !== 0 || rows.length === 0;
+  }
+
+  if (filters) {
+    filters.addEventListener("click", event => {
+      const button = event.target.closest("button");
+      if (!button) return;
+      if (button.dataset.statusFilter !== undefined) {
+        statusFilter = button.dataset.statusFilter;
+        filters.querySelectorAll("[data-status-filter]").forEach(item => item.classList.toggle("active", item === button));
+      }
+      if (button.dataset.dateFilter === "week") {
+        weekOnly = !weekOnly;
+        button.classList.toggle("active", weekOnly);
+      }
+      applyFilters();
+    });
+  }
+  if (search) search.addEventListener("input", applyFilters);
+})();
+</script>
+{% endblock %}

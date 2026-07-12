@@ -113,12 +113,14 @@ class AgentChatWorkflow:
         documents: list[SourceDocument],
         max_messages: int = DEFAULT_AGENTCHAT_MAX_MESSAGES,
         runner: Runner | None = None,
+        cancel_checker: Callable[[], bool] | None = None,
     ) -> None:
         self.store = store
         self.model_settings = model_settings
         self.documents = documents
-        self.max_messages = max_messages
+        self.max_messages = int(model_settings.get("agentchat_max_messages") or max_messages)
         self.runner = runner
+        self.cancel_checker = cancel_checker
         self.draft_tables: dict[str, list[dict[str, Any]]] = _new_draft_tables()
         self.tool_state: dict[str, Any] = {}
 
@@ -354,40 +356,69 @@ class AgentChatWorkflow:
         )
 
     async def _run_team_with_progress(self, *, team: Any, task: str) -> Any:
+        from autogen_core import CancellationToken
+
         task_result: Any = None
         validation_error_counts: dict[str, int] = {}
-        async for event in team.run_stream(task=task):
-            if hasattr(event, "messages") and hasattr(event, "stop_reason"):
-                task_result = event
-                continue
-            source = str(getattr(event, "source", event.__class__.__name__))
-            raw_content = _message_content(event)
-            final_payload = _extract_final_payload_from_text(raw_content)
-            repeated_error = _track_repeated_validation_error(
-                raw_content,
-                validation_error_counts,
-                _repeated_validation_error_limit(self.model_settings),
-            )
-            content = raw_content.replace("\r", " ").replace("\n", " ").strip()
-            if len(content) > 160:
-                content = content[:160] + "..."
-            LOGGER.info("AgentChat event from %s: %s", source, content or event.__class__.__name__)
-            if final_payload:
-                LOGGER.info("AgentChat final payload captured from tool result.")
-                return SimpleNamespace(
-                    messages=[
-                        SimpleNamespace(source="coordinator_agent", content=final_payload)
-                    ],
-                    stop_reason="final_payload_tool_result",
+        cancellation_token = CancellationToken()
+        cancel_task = asyncio.create_task(self._watch_cancel(cancellation_token))
+        try:
+            async for event in team.run_stream(task=task, cancellation_token=cancellation_token):
+                self._raise_if_cancelled()
+                if hasattr(event, "messages") and hasattr(event, "stop_reason"):
+                    task_result = event
+                    continue
+                source = str(getattr(event, "source", event.__class__.__name__))
+                raw_content = _message_content(event)
+                final_payload = _extract_final_payload_from_text(raw_content)
+                repeated_error = _track_repeated_validation_error(
+                    raw_content,
+                    validation_error_counts,
+                    _repeated_validation_error_limit(self.model_settings),
                 )
-            if repeated_error:
-                raise AgentOutputValidationError(
-                    "Repeated AgentChat validation blocker; stopping model repair loop: "
-                    f"{repeated_error}"
-                )
+                content = raw_content.replace("\r", " ").replace("\n", " ").strip()
+                if len(content) > 160:
+                    content = content[:160] + "..."
+                LOGGER.info("AgentChat event from %s: %s", source, content or event.__class__.__name__)
+                if final_payload:
+                    LOGGER.info("AgentChat final payload captured from tool result.")
+                    return SimpleNamespace(
+                        messages=[
+                            SimpleNamespace(source="coordinator_agent", content=final_payload)
+                        ],
+                        stop_reason="final_payload_tool_result",
+                    )
+                if repeated_error:
+                    raise AgentOutputValidationError(
+                        "Repeated AgentChat validation blocker; stopping model repair loop: "
+                        f"{repeated_error}"
+                    )
+        except asyncio.CancelledError as exc:
+            self._raise_if_cancelled()
+            raise exc
+        finally:
+            cancel_task.cancel()
+            try:
+                await cancel_task
+            except asyncio.CancelledError:
+                pass
         if task_result is None:
             raise AgentChatRuntimeError("AutoGen AgentChat ended without a task result.")
         return task_result
+
+    async def _watch_cancel(self, cancellation_token: Any) -> None:
+        while True:
+            await asyncio.sleep(1)
+            if self._is_cancelled():
+                cancellation_token.cancel()
+                return
+
+    def _is_cancelled(self) -> bool:
+        return bool(self.cancel_checker and self.cancel_checker())
+
+    def _raise_if_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise AgentChatRuntimeError("Job cancelled by user.")
 
     def _clear_unvalidated_outputs(self) -> None:
         reset_agentchat_output_tables(self.store)
@@ -612,6 +643,7 @@ def build_selector_team(
         agent_name: build_agent_tools(
             store=store,
             documents=documents,
+            model_settings=model_settings,
             draft_tables=draft_tables,
             writer_agent=agent_name,
             tool_state=tool_state,
@@ -633,7 +665,7 @@ def build_selector_team(
             system_message=_agent_system_message("data_parser_agent"),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=4,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 4),
         ),
         AssistantAgent(
             "wbs_planner_agent",
@@ -643,7 +675,7 @@ def build_selector_team(
             system_message=_agent_system_message("wbs_planner_agent"),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=4,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 4),
         ),
         AssistantAgent(
             "resource_allocator_agent",
@@ -653,7 +685,7 @@ def build_selector_team(
             system_message=_agent_system_message("resource_allocator_agent"),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=3,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 3),
         ),
         AssistantAgent(
             "constraint_checker_agent",
@@ -663,7 +695,7 @@ def build_selector_team(
             system_message=_agent_system_message("constraint_checker_agent"),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=3,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 3),
         ),
         AssistantAgent(
             "dynamic_responder_agent",
@@ -673,7 +705,7 @@ def build_selector_team(
             system_message=_agent_system_message("dynamic_responder_agent"),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=3,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 3),
         ),
         AssistantAgent(
             "plan_arbiter_agent",
@@ -683,7 +715,7 @@ def build_selector_team(
             system_message=_agent_system_message("plan_arbiter_agent"),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=3,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 3),
         ),
         AssistantAgent(
             "coordinator_agent",
@@ -693,7 +725,7 @@ def build_selector_team(
             system_message=_coordinator_system_message(),
             tool_call_summary_formatter=_tool_call_summary_formatter,
             reflect_on_tool_use=REFLECT_ON_TOOL_USE,
-            max_tool_iterations=4,
+            max_tool_iterations=_tool_iteration_limit(model_settings, 4),
         ),
     ]
     termination = TextMentionTermination(
@@ -725,14 +757,19 @@ def build_agent_tools(
     *,
     store: ExcelBlackboardStore,
     documents: list[SourceDocument],
+    model_settings: dict[str, Any] | None = None,
     draft_tables: dict[str, list[dict[str, Any]]] | None = None,
     writer_agent: str | None = None,
     tool_state: dict[str, Any] | None = None,
 ) -> list[Callable[..., Any]]:
     """Build Python tools exposed to AssistantAgents."""
 
+    model_settings = model_settings or {}
     source_names = ", ".join(document.name for document in documents) or "未提供资料"
-    source_text = concatenate_documents(documents, max_chars=12000)
+    source_text = concatenate_documents(
+        documents,
+        max_chars=int(model_settings.get("agentchat_source_chars") or 12000),
+    )
     extracted_parameters = extract_parameter_checklist_by_rules(
         source_text,
         source_names=source_names,
@@ -752,7 +789,10 @@ def build_agent_tools(
     def read_source_context(max_chars: int = 3000) -> str:
         """Return concatenated real source document text."""
 
-        return concatenate_documents(documents, max_chars=min(max_chars, 4000))
+        default_chars = int(model_settings.get("agentchat_default_context_chars") or 3000)
+        cap_chars = int(model_settings.get("agentchat_context_chars") or 4000)
+        requested = int(max_chars or default_chars)
+        return concatenate_documents(documents, max_chars=min(requested, cap_chars))
 
     def read_extracted_parameter_candidates() -> str:
         """Return deterministic parameter candidates extracted from real documents."""
@@ -761,8 +801,12 @@ def build_agent_tools(
             {
                 "parameter_checklist": extracted_parameters,
                 "project_parameters": extracted_project_parameters,
-                "document_sections": document_section_rows[:80],
-                "document_tables": document_table_rows[:40],
+                "document_sections": document_section_rows[
+                    : int(model_settings.get("agentchat_evidence_rows") or 80)
+                ],
+                "document_tables": document_table_rows[
+                    : max(1, int(model_settings.get("agentchat_evidence_rows") or 80) // 2)
+                ],
                 "extracted_facts": extracted_fact_rows,
             },
             ensure_ascii=False,
@@ -772,7 +816,9 @@ def build_agent_tools(
     def read_document_evidence(max_rows: int = 80) -> str:
         """Return parsed evidence rows with evidence_id values."""
 
-        limit = max(1, min(int(max_rows or 80), 120))
+        default_rows = int(model_settings.get("agentchat_evidence_rows") or 80)
+        max_allowed = int(model_settings.get("agentchat_max_evidence_rows") or 120)
+        limit = max(1, min(int(max_rows or default_rows), max_allowed))
         return json.dumps(
             {
                 "document_sections": document_section_rows[:limit],
@@ -1549,9 +1595,8 @@ def _mask_completion_marker(value: str) -> str:
 def _runtime_failure_message(exc: Exception, *, attempt: int) -> str:
     if _exception_indicates_rate_limit(exc):
         return (
-            f"AutoGen AgentChat runtime failed on attempt {attempt}: model provider "
-            "rate limit was reached (HTTP 429). Stop retrying immediately, wait for "
-            "the provider quota window to reset, or reduce AgentChat request volume."
+            f"模型服务商触发限流（HTTP 429），第 {attempt} 次尝试已停止。"
+            "请等待额度窗口恢复后重试，或改用轻量模式、减少上传资料量、避免多人同时运行任务。"
         )
     if _exception_chain_contains(exc, {"APITimeoutError", "ReadTimeout", "TimeoutError"}):
         return (
@@ -1561,6 +1606,16 @@ def _runtime_failure_message(exc: Exception, *, attempt: int) -> str:
             "provider is responsive."
         )
     return f"AutoGen AgentChat runtime failed on attempt {attempt}: {exc}"
+
+
+def _tool_iteration_limit(settings: dict[str, Any], default: int) -> int:
+    try:
+        configured = int(settings.get("agentchat_tool_iterations") or 0)
+    except (TypeError, ValueError):
+        configured = 0
+    if configured <= 0:
+        return default
+    return max(1, min(default, configured))
 
 
 def _runtime_fix_action(exc: Exception) -> str:

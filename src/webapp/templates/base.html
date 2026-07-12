@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "排程系统" }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260707-1735">
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script defer src="https://unpkg.com/alpinejs@3.14.1/dist/cdn.min.js"></script>
+</head>
+<body class="app-body">
+  {% set current_path = request.url.path if request else "" %}
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="side-brand" href="/jobs">
+        <span class="side-brand-mark"><img src="/static/brand-icon.png" alt=""></span>
+        <span>
+          <strong>施工进度管理系统</strong>
+          <small>Agent Schedule</small>
+        </span>
+      </a>
+      <nav class="side-nav" aria-label="主导航">
+        <a class="{% if current_path == '/jobs' %}active{% endif %}" href="/jobs">
+          <span>▤</span>任务列表
+        </a>
+        <a class="{% if current_path == '/jobs/new' %}active{% endif %}" href="/jobs/new">
+          <span>⇧</span>上传资料
+        </a>
+        {% if job is defined %}
+        <a class="{% if job is defined and current_path == '/jobs/' ~ job.job_id %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}{% else %}/jobs{% endif %}">
+          <span>▧</span>任务详情
+        </a>
+        <a class="{% if job is defined and '/preprocess' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/preprocess{% else %}/jobs{% endif %}">
+          <span>▥</span>预处理详情
+        </a>
+        <a class="{% if job is defined and '/edit' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/edit{% else %}/jobs{% endif %}">
+          <span>⚙</span>编辑排程
+        </a>
+        <a class="{% if job is defined and '/visualize' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/visualize{% else %}/jobs{% endif %}">
+          <span>▣</span>进度看板
+        </a>
+        <a class="{% if job is defined and '/logs' in current_path %}active{% endif %}" href="{% if job is defined %}/jobs/{{ job.job_id }}/logs{% else %}/jobs{% endif %}">
+          <span>◷</span>运行日志
+        </a>
+        {% endif %}
+      </nav>
+      <div class="side-help">
+        <strong>工作流程</strong>
+        {% if job is defined %}
+        <p>当前任务：{{ job.job_id }}。可查看详情、日志、看板，或进入编辑排程调整方案。</p>
+        {% else %}
+        <p>先从任务列表选择一个项目，或上传资料创建新任务；进入任务后会显示详情、日志、看板和编辑入口。</p>
+        {% endif %}
+      </div>
+    </aside>
+    <div class="main-shell">
+      <header class="topbar">
+        <div class="topbar-title">
+          <span>工程项目工作台</span>
+          <strong>多智能体施工进度生成与调整系统</strong>
+        </div>
+        <div class="topbar-actions">
+          <label class="top-search" aria-label="搜索任务、WBS、日志">
+            <span>⌕</span>
+            <input id="globalSearchInput" type="search" placeholder="搜索任务、WBS、日志">
+          </label>
+          <span class="top-user">{{ current_user(request) or "用户" }}</span>
+          <a class="button secondary compact-button" href="/jobs?welcome=1">使用指引</a>
+          <form method="post" action="/logout">
+            <button type="submit" class="link-button">退出</button>
+          </form>
+        </div>
+      </header>
+      <main class="page">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+  {% if request and request.query_params.get("welcome") == "1" %}
+  <div class="welcome-modal" id="welcomeModal" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+    <div class="welcome-dialog">
+      <div class="welcome-head">
+        <div>
+          <h2 id="welcomeTitle">欢迎使用施工排程系统</h2>
+          <p>建议按下面顺序操作，可以减少资料不完整导致的运行失败。</p>
+        </div>
+        <button type="button" class="icon-close" id="welcomeClose" aria-label="关闭">×</button>
+      </div>
+      <ol class="guide-steps">
+        <li><strong>上传资料</strong><span>支持 Word、Excel、PDF、CSV、TXT/MD。</span></li>
+        <li><strong>资料预处理</strong><span>先生成标准化输入包，检查缺失参数、资源数量和关键节点。</span></li>
+        <li><strong>启动运行</strong><span>资料较多或额度紧张时优先用轻量模式。</span></li>
+        <li><strong>查看结果</strong><span>在进度看板查看甘特图、资源联动、基准对比和调整历史。</span></li>
+        <li><strong>调整与下载</strong><span>需要修改方案时进入编辑排程，重算后下载结果包。</span></li>
+      </ol>
+      <div class="welcome-actions">
+        <a class="button" href="/jobs/new">新建任务</a>
+        <button type="button" class="secondary" id="welcomeOk">我知道了</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const modal = document.getElementById("welcomeModal");
+      const close = () => {
+        modal.remove();
+        const url = new URL(window.location.href);
+        url.searchParams.delete("welcome");
+        window.history.replaceState({}, "", url);
+      };
+      document.getElementById("welcomeClose").addEventListener("click", close);
+      document.getElementById("welcomeOk").addEventListener("click", close);
+      modal.addEventListener("click", event => {
+        if (event.target === modal) close();
+      });
+    })();
+  </script>
+  {% endif %}
+</body>
+</html>

@@ -40,6 +40,9 @@ data/.tmp/
 data/cases/*/blackboard/
 data/cases/*/.tmp/
 data/cases/*/archive/
+data/web/**
+!data/web/
+!data/web/.gitkeep
 
 # Office and OS temporary files
 ~$*

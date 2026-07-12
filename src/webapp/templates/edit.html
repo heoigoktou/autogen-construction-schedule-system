@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>编辑排程表</h1>
+    <div class="muted">任务 {{ job.job_id }}</div>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="/jobs/{{ job.job_id }}">返回任务</a>
+    <form method="post" action="/jobs/{{ job.job_id }}/recalculate">
+      <button type="submit">重新计算</button>
+    </form>
+  </div>
+</div>
+{% if message %}<div class="notice">{{ message }}</div>{% endif %}
+{% if job.metadata.error_summary %}<div class="alert">{{ job.metadata.error_summary }}</div>{% endif %}
+{% if errors %}
+<div class="alert">
+  {% for error in errors %}
+  <div>第 {{ error.row }} 行 {{ error.field }}：{{ error.message }}</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<section class="edit-section" x-data="{ tab: 'adjust' }">
+  <div class="tabs">
+    <button type="button" :class="{active: tab === 'adjust'}" @click="tab = 'adjust'">计划调整</button>
+    <button type="button" :class="{active: tab === 'wbs'}" @click="tab = 'wbs'">WBS</button>
+    <button type="button" :class="{active: tab === 'resources'}" @click="tab = 'resources'">资源</button>
+  </div>
+
+  <form class="form-panel adjustment-panel" method="post" action="/jobs/{{ job.job_id }}/adjust" x-show="tab === 'adjust'">
+    <h2>计划调整中心</h2>
+    <p class="muted">可以调整项目参数、任务工期/前置关系、资源配置，或记录特殊事件。保存后点击“重新计算”，系统会基于最新黑板数据生成新的排程、CPM、资源负载、里程碑和图表。</p>
+
+    <div class="adjustment-block">
+      <h3>项目参数调整</h3>
+      <div class="form-grid">
+        <label>开工日期
+          <input type="date" name="start_date" value="{{ current_start_date }}">
+        </label>
+        <label>目标完工日期
+          <input type="date" name="finish_date">
+        </label>
+        <label>总工期（天）
+          <input type="number" name="total_days" min="1" step="1">
+        </label>
+        <label>其他参数编号
+          <input type="text" name="parameter_id" placeholder="例如 P-012、P-013">
+        </label>
+        <label>其他参数值
+          <input type="text" name="parameter_value" placeholder="输入需要覆盖的新值">
+        </label>
+        <label>其他参数单位
+          <input type="text" name="parameter_unit" placeholder="天、层、m2 等">
+        </label>
+      </div>
+    </div>
+
+    <div class="adjustment-block">
+      <h3>任务工期与逻辑调整</h3>
+      <div class="form-grid">
+        <label>任务 task_id
+          <input type="text" name="task_id" placeholder="例如 T012">
+        </label>
+        <label>设置新工期（天）
+          <input type="number" name="duration_set" min="0" step="1" placeholder="留空则不覆盖">
+        </label>
+        <label>工期增减（天）
+          <input type="number" name="duration_delta" step="1" placeholder="例如 3 或 -2">
+        </label>
+        <label>前置任务
+          <input type="text" name="predecessor_ids" placeholder="多个 task_id 用英文逗号分隔">
+        </label>
+        <label>关系类型
+          <select name="relation_type">
+            <option value="">不修改</option>
+            <option value="FS">FS 完成后开始</option>
+            <option value="SS">SS 同时开始</option>
+          </select>
+        </label>
+        <label>滞后/提前天数
+          <input type="number" name="lag_days" step="1" placeholder="正数滞后，负数提前">
+        </label>
+      </div>
+    </div>
+
+    <div class="adjustment-block">
+      <h3>资源配置调整</h3>
+      <div class="form-grid">
+        <label>资源对应 task_id
+          <input type="text" name="resource_task_id" placeholder="可只填 task_id">
+        </label>
+        <label>资源名称
+          <input type="text" name="resource_name" placeholder="可只填资源名称">
+        </label>
+        <label>新需求量 demand
+          <input type="number" name="resource_demand" min="0" step="0.01">
+        </label>
+        <label>新能力 capacity
+          <input type="number" name="resource_capacity" min="0" step="0.01">
+        </label>
+      </div>
+    </div>
+
+    <div class="adjustment-block">
+      <h3>特殊状况/风险事件</h3>
+      <div class="form-grid">
+        <label>事件类型
+          <select name="event_type">
+            <option value="">不添加事件</option>
+            {% for key, preset in event_presets.items() %}
+            <option value="{{ key }}">{{ preset.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>影响天数
+          <input type="number" name="impact_days" min="0" step="1" placeholder="留空则使用默认值">
+        </label>
+        <label>受影响任务
+          <input type="text" name="related_task" placeholder="task_id、阶段名或任务关键词；留空影响全部">
+        </label>
+      </div>
+
+      <label>事件或调整说明
+        <textarea name="event_note" rows="4" placeholder="例如：材料延迟到场、设计变更、验收推迟、连续降雨导致室外作业暂停。"></textarea>
+      </label>
+    </div>
+
+    <div class="adjustment-block">
+      <h3>突发事件说明</h3>
+      <div class="adjustment-presets">
+        {% for key, preset in event_presets.items() %}
+        <div>
+          <strong>{{ preset.label }}</strong>
+          <span>默认影响 {{ preset.default_impact_days }} 天</span>
+          <p>{{ preset.measure }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="row-actions">
+      <button type="submit">保存调整</button>
+      <button type="submit" formmethod="post" formaction="/jobs/{{ job.job_id }}/recalculate" class="secondary">直接重新计算</button>
+    </div>
+  </form>
+
+  <form method="post" action="/jobs/{{ job.job_id }}/edit/wbs" x-show="tab === 'wbs'">
+    <div class="table-toolbar">
+      <div>
+        <h2>WBS 编辑</h2>
+        <p class="muted">横向滚动查看全部字段，保存后可重新计算生成新排程。</p>
+      </div>
+      <button type="submit">保存 WBS</button>
+    </div>
+    <div class="table-wrap wide">
+      <table class="edit-table">
+        <thead>
+          <tr>{% for field in wbs_fields %}<th>{{ field }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in wbs_rows %}
+          {% set i = loop.index0 %}
+          <tr>
+            {% for field in wbs_fields %}
+            <td><input name="{{ field }}__{{ i }}" value="{{ row.get(field, '') }}"></td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {% for extra in range(5) %}
+          {% set i = wbs_rows|length + extra %}
+          <tr>
+            {% for field in wbs_fields %}
+            <td><input name="{{ field }}__{{ i }}"></td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+
+  <form method="post" action="/jobs/{{ job.job_id }}/edit/resources" x-show="tab === 'resources'">
+    <div class="table-toolbar">
+      <div>
+        <h2>资源编辑</h2>
+        <p class="muted">资源行必须保留 demand 和 capacity，空白备用行可以不填写。</p>
+      </div>
+      <button type="submit">保存资源</button>
+    </div>
+    <div class="table-wrap wide">
+      <table class="edit-table">
+        <thead>
+          <tr>{% for field in resource_fields %}<th>{{ field }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in resource_rows %}
+          {% set i = loop.index0 %}
+          <tr>
+            {% for field in resource_fields %}
+            <td><input name="{{ field }}__{{ i }}" value="{{ row.get(field, '') }}"></td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+          {% for extra in range(5) %}
+          {% set i = resource_rows|length + extra %}
+          <tr>
+            {% for field in resource_fields %}
+            <td><input name="{{ field }}__{{ i }}"></td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </form>
+</section>
+{% endblock %}

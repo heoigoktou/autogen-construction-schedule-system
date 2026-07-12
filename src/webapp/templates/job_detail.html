@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ job.metadata.name or ("任务 " ~ job.job_id) }}</h1>
+    <div class="muted">任务 ID：{{ job.job_id }} · {{ job.metadata.created_at|date_only }}</div>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="/jobs/{{ job.job_id }}">刷新状态</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/logs">日志</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/preprocess">资料预处理</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/edit">编辑排程</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/visualize">进度看板</a>
+  </div>
+</div>
+<section class="job-summary">
+  <div class="summary-main">
+    <span class="status status-{{ job.metadata.status }}">{{ job.metadata.status }}</span>
+    <div>
+      <strong>
+        {% if job.metadata.status == "running" %}任务正在运行{% elif job.metadata.status == "cancelling" %}正在中止任务{% elif job.metadata.status == "succeeded" %}任务已完成{% elif job.metadata.status == "failed" %}任务失败{% elif job.metadata.status == "cancelled" %}任务已中止{% else %}任务待启动{% endif %}
+      </strong>
+      <p>
+        {% if job.metadata.status in ["running", "cancelling"] %}
+        当前任务正在占用后台执行器。可以查看日志跟踪进度，必要时中止任务。
+        {% elif job.metadata.status == "succeeded" %}
+        结果文件已生成，可下载或进入编辑页调整 WBS 和资源后重新计算。
+        {% elif job.metadata.status == "failed" %}
+        任务执行失败，请优先查看日志和错误摘要，调整资料或改用轻量模式后重新运行。
+        {% else %}
+        上传资料已保存，可启动 Agent 流程。
+        {% endif %}
+      </p>
+    </div>
+  </div>
+  <div class="summary-metrics">
+    <div><span>开始</span><strong>{{ job.metadata.started_at|date_only }}</strong></div>
+    <div><span>结束</span><strong>{{ job.metadata.finished_at|date_only }}</strong></div>
+    <div><span>资料</span><strong>{{ job.metadata.uploads|length }}</strong></div>
+    <div><span>产物</span><strong>{{ artifacts|length }}</strong></div>
+  </div>
+</section>
+{% if job.metadata.error_summary %}
+<div class="alert">{{ job.metadata.error_summary }}</div>
+{% endif %}
+{% if job.metadata.preflight_warnings %}
+<div class="notice">
+  {% for warning in job.metadata.preflight_warnings %}
+  <div>{{ warning }}</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<section class="panel-section preprocess-overview">
+  <div class="section-head">
+    <div>
+      <h2>资料预处理</h2>
+      <p class="muted">先把非标准项目资料加工成标准化输入包，检查缺失参数和资源数量，再启动 Agent。</p>
+    </div>
+    <div class="button-row">
+      <form method="post" action="/jobs/{{ job.job_id }}/preprocess">
+        <button type="submit" {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>生成标准化输入包</button>
+      </form>
+      <a class="button secondary" href="/jobs/{{ job.job_id }}/preprocess">查看预处理</a>
+    </div>
+  </div>
+  {% if preprocess %}
+  <div class="preprocess-stats">
+    <div><span>准备度</span><strong>{{ preprocess.summary.readiness_score }} / 100</strong><small>{{ preprocess.summary.readiness_level }}</small></div>
+    <div><span>已识别参数</span><strong>{{ preprocess.summary.recognized_parameter_count }}</strong></div>
+    <div><span>缺失必需参数</span><strong>{{ preprocess.summary.missing_required_count }}</strong></div>
+    <div><span>资源候选</span><strong>{{ preprocess.summary.resource_candidate_count }}</strong></div>
+  </div>
+  {% if preprocess.readiness.blockers %}
+  <div class="notice">
+    {% for blocker in preprocess.readiness.blockers %}
+    <div>{{ blocker }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state">还没有生成标准化输入包。建议先做资料预处理，再启动运行。</div>
+  {% endif %}
+</section>
+
+<section class="detail-grid">
+  <div class="panel-section run-panel">
+    <div class="section-head">
+      <div>
+        <h2>运行操作</h2>
+        <p class="muted">轻量模式适合快速测试和额度紧张时使用；标准模式适合正式生成完整结果。</p>
+      </div>
+    </div>
+    <form method="post" action="/jobs/{{ job.job_id }}/run" class="run-form run-card">
+      <div class="run-mode-grid" role="radiogroup" aria-label="运行模式">
+        <label class="run-mode-card">
+          <input type="radio" name="run_mode" value="light" {% if job.metadata.run_mode == "light" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
+          <strong>轻量模式</strong>
+          <span>跳过重模型步骤，适合快速试跑、额度紧张或先检查资料结构。</span>
+        </label>
+        <label class="run-mode-card">
+          <input type="radio" name="run_mode" value="standard" {% if job.metadata.run_mode != "light" %}checked{% endif %} {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
+          <strong>标准模式</strong>
+          <span>执行完整多智能体流程，生成正式排程、图表和报告。</span>
+        </label>
+      </div>
+      <button type="submit" {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>
+        {% if job.metadata.status in ["succeeded", "failed", "cancelled"] %}重新运行{% else %}启动运行{% endif %}
+      </button>
+      {% if job.metadata.status in ["running", "queued", "cancelling"] %}
+      <span class="running-hint">任务运行中，请勿重复启动。</span>
+      {% endif %}
+    </form>
+    {% if job.metadata.status in ["running", "queued", "cancelling"] %}
+    <form method="post" action="/jobs/{{ job.job_id }}/cancel" onsubmit="return confirm('确定要中止这个任务吗？当前模型调用会尽快取消，已生成的临时草稿可能不完整。');">
+      <button type="submit" class="danger" {% if job.metadata.status == "cancelling" %}disabled{% endif %}>中止任务</button>
+    </form>
+    {% endif %}
+    {% if job.metadata.status == "failed" %}
+    <div class="next-step">下一步：打开日志查看失败位置，必要时改用轻量模式重新运行。</div>
+    {% endif %}
+  </div>
+
+  <div class="panel-section">
+    <div class="section-head">
+      <div>
+        <h2>可视化结果</h2>
+        <p class="muted">进入进度看板查看交互式甘特图、资源联动、里程碑和调整历史。</p>
+      </div>
+    </div>
+    <div class="button-row">
+      <a class="button" href="/jobs/{{ job.job_id }}/visualize">打开进度看板</a>
+      <a class="button secondary" href="/jobs/{{ job.job_id }}/edit">编辑并重算</a>
+    </div>
+  </div>
+</section>
+
+<section class="panel-section">
+  <div class="section-head">
+    <div>
+      <h2>任务信息</h2>
+      <p class="muted">本任务上传的原始资料。</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>原始文件名</th><th>落盘文件名</th><th>大小</th></tr></thead>
+      <tbody>
+        {% for file in job.metadata.uploads %}
+        <tr><td class="wrap-cell">{{ file.original_name }}</td><td class="wrap-cell">{{ file.stored_name }}</td><td>{{ file.size }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel-section">
+  <div class="section-head">
+    <div>
+      <h2>结果下载</h2>
+      <p class="muted">按用途分组下载 Excel、JSON、图表和报告。</p>
+    </div>
+    {% if artifacts|length > 1 %}
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/download/all">下载全部</a>
+    {% endif %}
+  </div>
+  {% if artifact_groups %}
+  <div class="artifact-groups">
+    {% for group in artifact_groups %}
+    <div class="artifact-group artifact-group-{{ group.id }}">
+      <h3>{{ group.title }}</h3>
+      <div class="artifact-list">
+        {% for artifact in group.artifacts %}
+        <a class="artifact-link" href="/jobs/{{ job.job_id }}/download/{{ artifact.key }}">{{ artifact.name }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty-state">任务完成后会显示可下载产物。</div>
+  {% endif %}
+</section>
+{% if job.metadata.status == "running" %}
+<section
+  class="log-preview"
+  hx-get="/jobs/{{ job.job_id }}/logs"
+  hx-trigger="load, every 4s"
+  hx-swap="innerHTML"
+  hx-on::before-swap="const b=this.querySelector('.log-box');this.dataset.scrollTop=b?b.scrollTop:0;this.dataset.atBottom=b&&((b.scrollHeight-b.scrollTop-b.clientHeight)<24);"
+  hx-on::after-swap="const b=this.querySelector('.log-box');if(b){if(this.dataset.atBottom==='true'){b.scrollTop=b.scrollHeight}else{b.scrollTop=Number(this.dataset.scrollTop||0)}}"
+>
+  <pre class="log-box">读取日志中...</pre>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <h1>运行日志</h1>
+  <div class="actions">
+    <button type="button" class="secondary" id="toggleLogRefresh">暂停自动刷新</button>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}">返回任务</a>
+  </div>
+</div>
+<section
+  id="logStream"
+  hx-get="/jobs/{{ job.job_id }}/logs"
+  hx-trigger="every 4s"
+  hx-swap="innerHTML"
+  hx-on::before-swap="const b=this.querySelector('.log-box');this.dataset.scrollTop=b?b.scrollTop:0;this.dataset.atBottom=b&&((b.scrollHeight-b.scrollTop-b.clientHeight)<24);"
+  hx-on::after-swap="const b=this.querySelector('.log-box');if(b){if(this.dataset.atBottom==='true'){b.scrollTop=b.scrollHeight}else{b.scrollTop=Number(this.dataset.scrollTop||0)}}"
+>
+  <pre class="log-box">{{ content }}</pre>
+</section>
+<script>
+(() => {
+  const stream = document.getElementById("logStream");
+  const toggle = document.getElementById("toggleLogRefresh");
+  let paused = false;
+  if (!stream || !toggle) return;
+  toggle.addEventListener("click", () => {
+    paused = !paused;
+    toggle.textContent = paused ? "恢复自动刷新" : "暂停自动刷新";
+    toggle.classList.toggle("active", paused);
+  });
+  stream.addEventListener("htmx:beforeRequest", event => {
+    if (paused) event.preventDefault();
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>资料预处理</h1>
+    <div class="muted">任务 {{ job.job_id }} · 原始资料标准化、缺失项检查和运行前补充建议</div>
+  </div>
+  <div class="actions">
+    <a class="button secondary" href="/jobs/{{ job.job_id }}">返回任务</a>
+    <form method="post" action="/jobs/{{ job.job_id }}/preprocess">
+      <button type="submit" {% if job.metadata.status in ["running", "cancelling"] %}disabled{% endif %}>重新生成</button>
+    </form>
+    {% if preprocess %}
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/download/preprocess_json">下载 JSON</a>
+    <a class="button secondary" href="/jobs/{{ job.job_id }}/download/preprocess_markdown">下载 Markdown</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if job.metadata.error_summary %}
+<div class="alert">{{ job.metadata.error_summary }}</div>
+{% endif %}
+
+{% if not preprocess %}
+<section class="panel-section">
+  <div class="empty-state">
+    <p>还没有预处理结果。</p>
+    <p>点击“重新生成”，系统会读取上传资料，生成标准化输入包，并列出缺失参数和建议补充项。</p>
+  </div>
+</section>
+{% else %}
+<section class="preprocess-hero">
+  <div>
+    <span>运行准备度</span>
+    <strong>{{ preprocess.summary.readiness_score }} / 100</strong>
+    <p>{{ preprocess.summary.readiness_level }}</p>
+  </div>
+  <div>
+    <span>可读文件</span>
+    <strong>{{ preprocess.summary.readable_document_count }} / {{ preprocess.summary.document_count }}</strong>
+    <p>已从上传资料中抽取正文、表格和片段。</p>
+  </div>
+  <div>
+    <span>缺失必需参数</span>
+    <strong>{{ preprocess.summary.missing_required_count }}</strong>
+    <p>建议运行前补充或确认。</p>
+  </div>
+  <div>
+    <span>资源候选</span>
+    <strong>{{ preprocess.summary.resource_candidate_count }}</strong>
+    <p>需要重点确认 demand 和 capacity。</p>
+  </div>
+</section>
+
+{% if preprocess.readiness.blockers %}
+<div class="notice">
+  {% for blocker in preprocess.readiness.blockers %}
+  <div>{{ blocker }}</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<section class="panel-section">
+  <div class="section-head">
+    <div>
+      <h2>建议补充问题</h2>
+      <p class="muted">这些问题会直接影响 Agent 生成 WBS、资源计划和后续排程计算。</p>
+    </div>
+  </div>
+  <div class="prep-card-grid">
+    {% for item in preprocess.supplement_questions %}
+    <article class="prep-card">
+      <strong>{{ item.field }}</strong>
+      <p>{{ item.reason }}</p>
+      <span>{{ item.suggestion }}</span>
+    </article>
+    {% else %}
+    <div class="empty-state">暂未发现必须补充的问题。</div>
+    {% endfor %}
+  </div>
+</section>
+
+<form method="post" action="/jobs/{{ job.job_id }}/preprocess/supplements">
+  <section class="panel-section">
+    <div class="section-head">
+      <div>
+        <h2>补充缺失参数</h2>
+        <p class="muted">填写后会保存到黑板 project_parameters，并同步更新参数检查清单。</p>
+      </div>
+      <button type="submit">保存补充并刷新预处理</button>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table supplement-table">
+        <thead>
+          <tr>
+            <th>参数</th>
+            <th>参数值</th>
+            <th>单位</th>
+            <th>备注 / 来源说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in preprocess.missing_required_parameters %}
+          {% set i = loop.index0 %}
+          <tr>
+            <td class="wrap-cell">
+              <strong>{{ row.name }}</strong>
+              <div class="muted">{{ row.parameter_id }}</div>
+              <input type="hidden" name="param_id__{{ i }}" value="{{ row.parameter_id }}">
+              <input type="hidden" name="param_name__{{ i }}" value="{{ row.name }}">
+              <input type="hidden" name="param_category__{{ i }}" value="{{ row.category }}">
+            </td>
+            <td><input type="text" name="param_value__{{ i }}" placeholder="填写参数值"></td>
+            <td><input type="text" name="param_unit__{{ i }}" value="{{ row.unit }}" placeholder="单位"></td>
+            <td><input type="text" name="param_note__{{ i }}" placeholder="例如：用户补充 / 合同第 x 页"></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="empty">没有缺失必需参数。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel-section">
+    <div class="section-head">
+      <div>
+        <h2>补充资源需求与能力</h2>
+        <p class="muted">用于解决 demand / capacity 缺失。task_id 需要对应 WBS 工序，例如 TASK-0001。</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table supplement-table resource-supplement-table">
+        <thead>
+          <tr>
+            <th>task_id</th>
+            <th>资源类型</th>
+            <th>资源名称</th>
+            <th>demand</th>
+            <th>单位</th>
+            <th>capacity</th>
+            <th>期间</th>
+            <th>备注</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in range(5) %}
+          {% set candidate = preprocess.resource_candidates[i] if preprocess.resource_candidates|length > i else {} %}
+          <tr>
+            <td><input type="text" name="resource_task_id__{{ i }}" placeholder="TASK-0001"></td>
+            <td>
+              <select name="resource_type__{{ i }}">
+                <option value="">请选择</option>
+                <option value="labor">labor 人工</option>
+                <option value="equipment">equipment 机械</option>
+                <option value="material">material 材料</option>
+                <option value="other">other 其他</option>
+              </select>
+            </td>
+            <td><input type="text" name="resource_name__{{ i }}" value="{{ candidate.name_hint or '' }}" placeholder="资源名称"></td>
+            <td><input type="number" name="resource_demand__{{ i }}" min="0" step="0.01" value="{{ candidate.quantity_hint or '' }}"></td>
+            <td><input type="text" name="resource_unit__{{ i }}" value="{{ candidate.unit_hint or '' }}" placeholder="人/台/t"></td>
+            <td><input type="number" name="resource_capacity__{{ i }}" min="0" step="0.01"></td>
+            <td><input type="text" name="resource_period__{{ i }}" placeholder="例如 2026-07"></td>
+            <td><input type="text" name="resource_note__{{ i }}" value="{{ candidate.snippet or '' }}" placeholder="说明"></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="form-help">提示：只填写完整的资源行会被保存；半空行会提示缺少哪些字段。</div>
+  </section>
+</form>
+
+<section class="prep-columns">
+  <div class="panel-section">
+    <h2>已识别关键参数</h2>
+    <div class="table-wrap compact-table">
+      <table class="data-table">
+        <thead><tr><th>参数</th><th>值</th><th>单位</th><th>状态</th></tr></thead>
+        <tbody>
+          {% for row in preprocess.recognized_parameters %}
+          <tr>
+            <td class="wrap-cell">{{ row.name }}</td>
+            <td class="wrap-cell">{{ row.value }}</td>
+            <td>{{ row.unit or "-" }}</td>
+            <td>{{ row.status }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="empty">暂无识别参数。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel-section">
+    <h2>缺失必需参数</h2>
+    <div class="table-wrap compact-table">
+      <table class="data-table">
+        <thead><tr><th>参数</th><th>建议检查位置</th></tr></thead>
+        <tbody>
+          {% for row in preprocess.missing_required_parameters %}
+          <tr>
+            <td class="wrap-cell">{{ row.name }}</td>
+            <td class="wrap-cell">{{ row.source }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="2" class="empty">没有缺失必需参数。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="panel-section">
+  <h2>资源候选信息</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>资源线索</th><th>数量</th><th>单位</th><th>原文片段</th></tr></thead>
+      <tbody>
+        {% for row in preprocess.resource_candidates %}
+        <tr>
+          <td>{{ row.name_hint or "-" }}</td>
+          <td>{{ row.quantity_hint or "-" }}</td>
+          <td>{{ row.unit_hint or "-" }}</td>
+          <td class="wrap-cell">{{ row.snippet }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">暂无资源候选信息。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="prep-columns">
+  <div class="panel-section">
+    <h2>工期与节点候选</h2>
+    <div class="prep-list">
+      {% for row in preprocess.schedule_candidates %}
+      <article><strong>{{ row.type }}</strong><p>{{ row.snippet }}</p></article>
+      {% else %}
+      <div class="empty-state">暂无工期与节点候选。</div>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="panel-section">
+    <h2>风险与扰动候选</h2>
+    <div class="prep-list">
+      {% for row in preprocess.risk_event_candidates %}
+      <article><strong>{{ row.event_hint or "风险线索" }}</strong><p>{{ row.snippet }}</p></article>
+      {% else %}
+      <div class="empty-state">暂无风险与扰动候选。</div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="panel-section">
+  <h2>工程量候选信息</h2>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead><tr><th>项目线索</th><th>数量</th><th>单位</th><th>原文片段</th></tr></thead>
+      <tbody>
+        {% for row in preprocess.quantity_candidates %}
+        <tr>
+          <td>{{ row.item_hint or "-" }}</td>
+          <td>{{ row.quantity_hint or "-" }}</td>
+          <td>{{ row.unit_hint or "-" }}</td>
+          <td class="wrap-cell">{{ row.snippet }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">暂无工程量候选信息。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}
