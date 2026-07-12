@@ -119,7 +119,9 @@ data/
   templates/            # 可提交的参数检查清单模板
 docs/workflow/          # 接口契约、运行手册和 Agent I/O 示例
 outputs/                # 本地运行输出，提交时只保留 .gitkeep
-src/                    # 源码、Agent、工具、测试
+src/                    # Python 源码、Agent、工具、CLI 入口、Web 应用和测试
+  webapp/               # Web 可视化界面，复用同一套调度与黑板逻辑
+data/web/               # Web 任务运行数据，提交时只保留 .gitkeep
 ```
 
 ## 安装
@@ -232,6 +234,26 @@ python src/visualize_schedule.py
 
 这些命令生成的 Excel、Markdown、图片和日志均属于本地运行产物，默认不提交。
 
+Web 可视化界面：
+
+```bash
+python -m pip install -e ".[dev]"
+uvicorn webapp.app:app --host 127.0.0.1 --port 8000
+```
+
+浏览器打开 `http://127.0.0.1:8000/login`。部署和登录环境变量见 `docs/web_deployment.md`。
+
+CLI 与 Web 共用 `src/tools/`、`src/agents/`、`src/blackboard/` 和 `src/agentchat_runtime/` 中的核心逻辑。CLI 入口保留在 `src/main_*.py`，Web 入口保留在 `src/webapp/`，不要把两个版本长期维护在互相隔离的分支中。
+
+## 协作分支约定
+
+- `main` 只放稳定版本，合并后应同时保留 CLI 和 Web 能力。
+- CLI 新功能从 `main` 拉分支，命名为 `feature/cli-xxx`。
+- Web 新功能从 `main` 拉分支，命名为 `feature/web-xxx`。
+- Bug 修复可用 `fix/xxx`，调试分支合并前应整理成清晰提交。
+- 所有功能分支通过 Pull Request 合并回 `main`，避免直接推送到 `main`。
+- 历史 `web` 分支只作为早期 Web 版本来源，后续 Web 开发使用 `feature/web-xxx` 命名。
+
 ## 输出
 
 | 路径 | 内容 |
@@ -241,6 +263,7 @@ python src/visualize_schedule.py
 | `outputs/real_case/report_assets/` | 报告素材 |
 | `outputs/demo/` | Demo 检查输出 |
 | `data/blackboard/` | 本地公共黑板工作簿 |
+| `data/web/` | Web 任务、上传文件和运行结果，本地生成，不提交 |
 
 ## 测试
 
