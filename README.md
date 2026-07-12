@@ -281,13 +281,6 @@ python -m black src
 python -m ruff check src
 ```
 
-## Git 协作约定
-
-- `main` 只放稳定版本，合并后应同时保留 CLI 和 Web 能力。
-- CLI 新功能从 `main` 拉分支，命名为 `feature/cli-xxx`。
-- Web 新功能从 `main` 拉分支，命名为 `feature/web-xxx`。
-- Bug 修复可用 `fix/xxx`。
-- 所有功能分支通过 Pull Request 合并回 `main`，避免直接推送到 `main`。
 
 ## License
 
