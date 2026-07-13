@@ -1022,6 +1022,27 @@ def _pil_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageF
 
 
 def _load_pil_font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
+    common_paths = (
+        r"C:\Windows\Fonts\msyhbd.ttc" if bold else r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
+        (
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"
+            if bold
+            else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
+        ),
+        (
+            "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc"
+            if bold
+            else "/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc"
+        ),
+    )
+    for font_path in common_paths:
+        if Path(font_path).exists():
+            try:
+                return ImageFont.truetype(font_path, size)
+            except OSError:
+                continue
+
     preferred = (
         "Microsoft YaHei",
         "SimHei",
