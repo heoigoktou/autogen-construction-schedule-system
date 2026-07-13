@@ -97,6 +97,7 @@ def run_real_case_workflow(
     setup_logging(context.runtime_log)
     model_settings = build_model_settings(project_root)
     model_settings.update(_agentchat_mode_overrides(run_mode))
+    model_settings.setdefault("max_tokens", 3000)
 
     store = ExcelBlackboardStore(context.blackboard_path)
     store.initialize()
@@ -248,19 +249,28 @@ def _project_start_date(project_parameters: list[dict[str, Any]]) -> date:
 
 def _agentchat_mode_overrides(run_mode: str) -> dict[str, Any]:
     if run_mode != "light":
-        return {"agentchat_run_mode": "standard"}
+        return {
+            "agentchat_run_mode": "standard",
+            "max_tokens": 3000,
+            "team_run_timeout_seconds": 1200,
+            "agent_text_stall_limit": 4,
+        }
     return {
         "agentchat_run_mode": "light",
-        "agentchat_max_messages": 60,
-        "agentchat_max_turns": 12,
-        "agentchat_source_chars": 5000,
-        "agentchat_context_chars": 1800,
-        "agentchat_default_context_chars": 1200,
-        "agentchat_evidence_rows": 30,
-        "agentchat_max_evidence_rows": 50,
+        "agentchat_max_messages": 36,
+        "agentchat_max_turns": 8,
+        "agentchat_source_chars": 3500,
+        "agentchat_context_chars": 1200,
+        "agentchat_default_context_chars": 900,
+        "agentchat_evidence_rows": 18,
+        "agentchat_max_evidence_rows": 30,
         "agentchat_tool_iterations": 2,
         "repeated_validation_error_limit": 1,
-        "team_run_timeout_seconds": 900,
+        "repeated_tool_call_limit": 3,
+        "agent_text_stall_limit": 3,
+        "team_run_timeout_seconds": 420,
+        "max_tokens": 1800,
+        "agentchat_fallback_on_runtime_error": True,
     }
 
 

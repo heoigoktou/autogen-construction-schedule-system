@@ -46,6 +46,11 @@ EXPORT_FILES = {
     **VISUAL_EXPORTS,
 }
 
+LEGACY_EXPORT_FILES = {
+    "wbs_tasks_final": "WBS工序分解表.xlsx",
+    "resource_plan_final": "资源需求表.xlsx",
+}
+
 
 def recalculate_blackboard_outputs(
     store: ExcelBlackboardStore,
@@ -127,7 +132,11 @@ def export_job_artifacts(store: ExcelBlackboardStore, outputs_root: Path) -> Non
         "constraint_check": schedule_dir / EXPORT_FILES["constraints"],
     }
     for sheet_name, path in table_exports.items():
-        export_rows_to_xlsx(store.read_rows(sheet_name), path, sheet_name)
+        rows = store.read_rows(sheet_name)
+        export_rows_to_xlsx(rows, path, sheet_name)
+        legacy_name = LEGACY_EXPORT_FILES.get(sheet_name)
+        if legacy_name:
+            export_rows_to_xlsx(rows, schedule_dir / legacy_name, sheet_name)
 
     wbs_rows = store.read_rows("wbs_tasks_final")
     cpm_rows = store.read_rows("cpm_analysis")

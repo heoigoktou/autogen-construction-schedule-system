@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,12 +8,18 @@ from types import SimpleNamespace
 import pytest
 
 from blackboard.excel_store import ExcelBlackboardStore
-from tests.helpers import minimal_parameter_checklist, minimal_resource_rows, minimal_wbs_rows
+from tests.helpers import (
+    minimal_event_rows,
+    minimal_parameter_checklist,
+    minimal_resource_rows,
+    minimal_wbs_rows,
+)
 from tools.case_context import resolve_web_case_context
 from tools.parameter_tools import build_project_parameter_rows
 from webapp.auth import make_password_hash, verify_password
 from webapp.editors import save_resource_rows, save_wbs_rows
-from webapp.jobs import copy_uploaded_files_to_job, save_uploads
+from webapp.jobs import copy_uploaded_files_to_job, load_job, save_uploads
+from webapp.preprocess import build_readiness, preprocess_job_documents
 from webapp.services import artifact_path, list_existing_artifacts, recalculate_blackboard_outputs
 
 
@@ -113,3 +120,111 @@ def test_create_job_writes_metadata_and_blackboard(tmp_path: Path) -> None:
     assert job.metadata["status"] == "queued"
     assert job.context.blackboard_path.exists()
     assert job.context.runtime_log.parent.exists()
+
+
+def test_preprocess_merges_existing_parameter_checklist(tmp_path: Path) -> None:
+    input_dir = tmp_path / "uploads"
+    input_dir.mkdir()
+    (input_dir / "case.md").write_text("# case\nNo structured parameters in this document.", encoding="utf-8")
+    blackboard_path = tmp_path / "blackboard.xlsx"
+    store = ExcelBlackboardStore(blackboard_path)
+    store.initialize()
+    checklist = minimal_parameter_checklist()
+    checklist.append(
+        {
+            **checklist[0],
+            "parameter_id": "P-016",
+            "category": "technical_boundary",
+            "name": "foundation_type",
+            "value": "raft foundation",
+            "note": "manual checklist value",
+        }
+    )
+    store.replace_rows("parameter_checklist", checklist)
+
+    result = preprocess_job_documents(input_dir, tmp_path / "outputs", blackboard_path)
+
+    assert result.package["summary"]["recognized_parameter_count"] >= len(checklist)
+    recognized_ids = {row["parameter_id"] for row in result.package["recognized_parameters"]}
+    missing_ids = {row["parameter_id"] for row in result.package["missing_required_parameters"]}
+    assert "P-016" in recognized_ids
+    assert "P-016" not in missing_ids
+    reloaded = ExcelBlackboardStore(blackboard_path)
+    assert len(reloaded.read_rows("parameter_checklist")) >= len(checklist)
+
+
+def test_readiness_rewards_complete_required_parameters() -> None:
+    readiness = build_readiness(
+        documents=[SimpleNamespace(text="readable source")],
+        recognized_parameters=[{"parameter_id": f"P-{index:03d}"} for index in range(8)],
+        missing_required=[],
+        resource_candidates=[{"name_hint": f"resource-{index}", "quantity_hint": "1"} for index in range(8)],
+        schedule_candidates=[{"type": "milestone"} for _ in range(10)],
+    )
+
+    assert readiness["score"] == 95
+
+
+def test_fallback_restores_preserved_manual_tables(tmp_path: Path) -> None:
+    from webapp import app as webapp_app
+
+    store = ExcelBlackboardStore(tmp_path / "blackboard.xlsx")
+    store.initialize()
+    store.replace_rows("parameter_checklist", minimal_parameter_checklist())
+    store.replace_rows("project_parameters", build_project_parameter_rows(minimal_parameter_checklist()))
+    store.replace_rows("wbs_tasks_final", minimal_wbs_rows())
+    store.replace_rows("resource_plan_final", minimal_resource_rows())
+    preserved = webapp_app.snapshot_preserved_tables(store)
+
+    fallback_wbs = [
+        {
+            **minimal_wbs_rows()[0],
+            "task_id": "TASK-FALLBACK",
+            "source": "rules_fallback+source_context",
+            "owner_agent": "fallback_scheduler",
+            "note": "Fallback placeholder.",
+        }
+    ]
+    event = {**minimal_event_rows()[0], "event_type": "runtime_fallback", "created_by": "fallback_scheduler"}
+    store.replace_rows("wbs_tasks_final", fallback_wbs)
+    store.replace_rows("resource_plan_final", [])
+    store.replace_rows("event_log", [event])
+
+    restored = webapp_app.restore_preserved_tables_after_fallback(store, preserved)
+
+    assert restored["wbs_tasks_final"] == len(minimal_wbs_rows())
+    assert restored["resource_plan_final"] == len(minimal_resource_rows())
+    assert len(store.read_rows("wbs_tasks_final")) == len(minimal_wbs_rows())
+    assert len(store.read_rows("resource_plan_final")) == len(minimal_resource_rows())
+
+
+def test_worker_refreshes_preprocess_package_before_workflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from webapp import app as webapp_app
+
+    upload = SimpleNamespace(filename="case.md", file=BytesIO(b"# case"))
+    job = copy_uploaded_files_to_job(tmp_path, [upload], max_upload_bytes=100)
+    calls: list[str] = []
+
+    def fake_preprocess(input_docs_dir: Path, outputs_root: Path, blackboard_path: Path) -> SimpleNamespace:
+        calls.append("preprocess")
+        return SimpleNamespace(package={"summary": {"readiness_score": 95, "missing_required_count": 0}})
+
+    def fake_workflow(**kwargs: object) -> dict[str, Path]:
+        calls.append("workflow")
+        context = kwargs["context"]
+        return {"output_dir": context.outputs_root, "blackboard": context.blackboard_path}
+
+    monkeypatch.setattr(webapp_app, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(webapp_app, "preprocess_job_documents", fake_preprocess)
+    monkeypatch.setattr(webapp_app, "run_real_case_workflow", fake_workflow)
+    monkeypatch.setattr(webapp_app, "recalculate_blackboard_outputs", lambda *args, **kwargs: {})
+    monkeypatch.setattr(webapp_app, "list_existing_artifacts", lambda *args, **kwargs: [])
+
+    lock = threading.Lock()
+    lock.acquire()
+    webapp_app._run_job_worker(job.job_id, lock, threading.Event(), {})
+
+    reloaded = load_job(tmp_path, job.job_id)
+    assert calls[:2] == ["preprocess", "workflow"]
+    assert reloaded.metadata["preprocess_summary"]["readiness_score"] == 95
+    assert reloaded.metadata["status"] == "succeeded"

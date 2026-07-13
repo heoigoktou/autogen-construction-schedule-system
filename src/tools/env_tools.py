@@ -68,6 +68,8 @@ def build_model_settings(project_root: Path) -> dict[str, Any]:
     temperature = _optional_float_env("OPENAI_TEMPERATURE", yaml_model.get("temperature"))
     timeout_seconds = _int_env("OPENAI_TIMEOUT_SECONDS", yaml_model.get("timeout_seconds"), 60)
     max_retries = _int_env("OPENAI_MAX_RETRIES", yaml_model.get("max_retries"), 2)
+    max_tokens = _optional_int_env("OPENAI_MAX_TOKENS", yaml_model.get("max_tokens"))
+    stream = _bool_env("OPENAI_STREAM", yaml_model.get("stream"), False)
     mock_mode = _bool_env("MODEL_MOCK_MODE", yaml_model.get("mock_mode"), provider == "mock")
 
     return {
@@ -79,6 +81,8 @@ def build_model_settings(project_root: Path) -> dict[str, Any]:
         "temperature": temperature,
         "timeout_seconds": timeout_seconds,
         "max_retries": max_retries,
+        "max_tokens": max_tokens,
+        "stream": stream,
         "mock_mode": mock_mode,
         "disable_thinking": disable_thinking,
     }
@@ -142,6 +146,21 @@ def _optional_float_env(name: str, yaml_value: Any) -> float | None:
         return float(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_int_env(name: str, yaml_value: Any) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = yaml_value
+    if raw is None:
+        return None
+    if isinstance(raw, str) and raw.strip().lower() in {"", "none", "null"}:
+        return None
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _int_env(name: str, yaml_value: Any, default: int) -> int:

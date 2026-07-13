@@ -355,19 +355,21 @@ def write_cpm_network_chart(
         raise ValueError("No CPM network nodes were found.")
 
     pos = _cpm_layout(graph, task_meta)
-    node_colors = [
-        CRITICAL_COLOR if task_meta[node]["critical"] else NORMAL_COLOR for node in graph.nodes
-    ]
-    node_sizes = [1050 if task_meta[node]["critical"] else 900 for node in graph.nodes]
     edge_colors = [
         CRITICAL_COLOR if (source, target) in critical_edges else "#7A869A"
         for source, target in graph.edges
     ]
-    edge_widths = [2.0 if (source, target) in critical_edges else 1.0 for source, target in graph.edges]
+    edge_widths = [2.4 if (source, target) in critical_edges else 0.9 for source, target in graph.edges]
     labels = {node: _network_label(node, task_meta[node]["task_name"]) for node in graph.nodes}
 
-    width = min(max(12, len({task_meta[node]["es"] for node in graph.nodes}) * 1.15), 24)
-    height = min(max(8, len(graph.nodes) * 0.18 + 4), 22)
+    x_values = [point[0] for point in pos.values()]
+    y_values = [point[1] for point in pos.values()]
+    layer_count = max(x_values) - min(x_values) + 1 if x_values else 1
+    max_layer_size = max(
+        sum(1 for point in pos.values() if point[0] == layer) for layer in set(x_values)
+    )
+    width = min(max(18, layer_count * 0.72 + 6), 36)
+    height = min(max(10, max_layer_size * 0.72 + 5, len(graph.nodes) * 0.12 + 5), 24)
     fig, ax = plt.subplots(figsize=(width, height), constrained_layout=True)
     nx.draw_networkx_edges(
         graph,
@@ -376,27 +378,43 @@ def write_cpm_network_chart(
         edge_color=edge_colors,
         width=edge_widths,
         arrows=True,
-        arrowsize=12,
-        connectionstyle="arc3,rad=0.05",
+        arrowsize=14,
+        alpha=0.74,
+        connectionstyle="arc3,rad=0.08",
     )
-    nx.draw_networkx_nodes(
-        graph,
-        pos,
-        ax=ax,
-        node_color=node_colors,
-        node_size=node_sizes,
-        edgecolors="white",
-        linewidths=1.3,
-    )
-    nx.draw_networkx_labels(
-        graph,
-        pos,
-        labels=labels,
-        ax=ax,
-        font_size=6.5,
-        font_color="white",
-    )
+    for node, (x_pos, y_pos) in pos.items():
+        critical = task_meta[node]["critical"]
+        ax.text(
+            x_pos,
+            y_pos,
+            labels[node],
+            ha="center",
+            va="center",
+            fontsize=7.2,
+            color="white",
+            linespacing=1.15,
+            bbox={
+                "boxstyle": "round,pad=0.34,rounding_size=0.18",
+                "facecolor": CRITICAL_COLOR if critical else NORMAL_COLOR,
+                "edgecolor": "white",
+                "linewidth": 1.2,
+            },
+            zorder=3,
+        )
     ax.set_title(title, fontsize=14, pad=12)
+    if x_values and y_values:
+        ax.set_xlim(min(x_values) - 1.0, max(x_values) + 1.0)
+        ax.set_ylim(min(y_values) - 1.0, max(y_values) + 1.0)
+    ax.text(
+        0.01,
+        0.01,
+        "节点：任务编号后四位 + 任务简称；红色为关键任务/关键关系。",
+        transform=ax.transAxes,
+        fontsize=9,
+        color="#42526E",
+        ha="left",
+        va="bottom",
+    )
     ax.axis("off")
     _add_critical_legend(ax)
     _save_figure(fig, path)
@@ -703,15 +721,32 @@ def _build_network(
 
 
 def _cpm_layout(graph: nx.DiGraph, task_meta: dict[str, dict[str, Any]]) -> dict[str, tuple[float, float]]:
+    layers: dict[str, int] = {}
+    try:
+        ordered_nodes = list(nx.topological_sort(graph))
+    except nx.NetworkXUnfeasible:
+        ordered_nodes = sorted(graph.nodes, key=lambda node: (task_meta[node]["es"], node))
+    for node in ordered_nodes:
+        predecessors = list(graph.predecessors(node))
+        layers[node] = max((layers.get(predecessor, 0) + 1 for predecessor in predecessors), default=0)
+
     groups: dict[int, list[str]] = {}
-    for node in graph.nodes:
-        groups.setdefault(task_meta[node]["es"], []).append(node)
+    for node, layer in layers.items():
+        groups.setdefault(layer, []).append(node)
     pos: dict[str, tuple[float, float]] = {}
-    for x_index, es in enumerate(sorted(groups)):
-        nodes = sorted(groups[es], key=lambda node: (task_meta[node]["ef"], node))
+    for x_index, layer in enumerate(sorted(groups)):
+        nodes = sorted(
+            groups[layer],
+            key=lambda node: (
+                not task_meta[node]["critical"],
+                task_meta[node]["es"],
+                task_meta[node]["ef"],
+                node,
+            ),
+        )
         center = (len(nodes) - 1) / 2
         for index, node in enumerate(nodes):
-            pos[node] = (x_index, center - index)
+            pos[node] = (x_index * 1.22, (center - index) * 0.95)
     return pos
 
 
@@ -838,7 +873,9 @@ def _configure_matplotlib() -> None:
     preferred_fonts = (
         "Microsoft YaHei",
         "SimHei",
+        "WenQuanYi Zen Hei",
         "Noto Sans CJK SC",
+        "Noto Sans CJK JP",
         "Source Han Sans SC",
         "Arial Unicode MS",
     )

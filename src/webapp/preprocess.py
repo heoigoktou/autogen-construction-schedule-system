@@ -55,7 +55,9 @@ def preprocess_job_documents(
 
     store = ExcelBlackboardStore(blackboard_path)
     store.initialize()
+    manual_checklist = store.read_rows("parameter_checklist")
     manual_parameters = store.read_rows("project_parameters")
+    parameter_rows = merge_manual_parameters(parameter_rows, manual_checklist)
     parameter_rows = merge_manual_parameters(parameter_rows, manual_parameters)
 
     package = build_standardized_package(
@@ -522,6 +524,8 @@ def build_readiness(
     score += min(30, len(recognized_parameters) * 4)
     score += min(20, len(schedule_candidates) * 2)
     score += min(15, len(resource_candidates) * 2)
+    if not missing_required and recognized_parameters:
+        score += 10
     score -= min(35, len(missing_required) * 4)
     score = max(0, min(100, score))
     if score >= 75:
