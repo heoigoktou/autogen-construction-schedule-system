@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ import matplotlib.pyplot as plt
 import networkx as nx
 from openpyxl import load_workbook
 from matplotlib import font_manager
+from PIL import Image, ImageDraw, ImageFont
 
 from blackboard.excel_store import ExcelBlackboardStore
 from tools.resource_tools import build_resource_load
@@ -348,58 +350,13 @@ def write_cpm_network_chart(
     *,
     title: str,
 ) -> Path:
-    """Write a CPM precedence network PNG."""
+    """Write a readable CPM precedence flowchart PNG."""
 
     graph, task_meta, critical_edges = _build_network(schedule_rows, cpm_rows, edge_rows)
     if not graph.nodes:
         raise ValueError("No CPM network nodes were found.")
 
-    pos = _cpm_layout(graph, task_meta)
-    node_colors = [
-        CRITICAL_COLOR if task_meta[node]["critical"] else NORMAL_COLOR for node in graph.nodes
-    ]
-    node_sizes = [1050 if task_meta[node]["critical"] else 900 for node in graph.nodes]
-    edge_colors = [
-        CRITICAL_COLOR if (source, target) in critical_edges else "#7A869A"
-        for source, target in graph.edges
-    ]
-    edge_widths = [2.0 if (source, target) in critical_edges else 1.0 for source, target in graph.edges]
-    labels = {node: _network_label(node, task_meta[node]["task_name"]) for node in graph.nodes}
-
-    width = min(max(12, len({task_meta[node]["es"] for node in graph.nodes}) * 1.15), 24)
-    height = min(max(8, len(graph.nodes) * 0.18 + 4), 22)
-    fig, ax = plt.subplots(figsize=(width, height), constrained_layout=True)
-    nx.draw_networkx_edges(
-        graph,
-        pos,
-        ax=ax,
-        edge_color=edge_colors,
-        width=edge_widths,
-        arrows=True,
-        arrowsize=12,
-        connectionstyle="arc3,rad=0.05",
-    )
-    nx.draw_networkx_nodes(
-        graph,
-        pos,
-        ax=ax,
-        node_color=node_colors,
-        node_size=node_sizes,
-        edgecolors="white",
-        linewidths=1.3,
-    )
-    nx.draw_networkx_labels(
-        graph,
-        pos,
-        labels=labels,
-        ax=ax,
-        font_size=6.5,
-        font_color="white",
-    )
-    ax.set_title(title, fontsize=14, pad=12)
-    ax.axis("off")
-    _add_critical_legend(ax)
-    _save_figure(fig, path)
+    _write_cpm_flowchart_image(path, graph, task_meta, critical_edges, title=title)
     return path
 
 
@@ -684,9 +641,13 @@ def _build_network(
         cpm = cpm_by_id.get(task_id, {})
         meta = {
             "task_name": str(row.get("task_name") or ""),
+            "phase": str(row.get("phase") or ""),
+            "duration": int(_as_float(row.get("duration_days"))),
+            "total_float": int(_as_float(cpm.get("total_float") or row.get("total_float"))),
             "es": int(_as_float(cpm.get("es"))),
             "ef": int(_as_float(cpm.get("ef"))),
             "critical": _to_bool(cpm.get("is_critical") or row.get("is_critical")),
+            "predecessor_ids": str(row.get("predecessor_ids") or ""),
         }
         graph.add_node(task_id)
         task_meta[task_id] = meta
@@ -697,8 +658,17 @@ def _build_network(
         target = str(edge.get("to_task_id") or "")
         if source in task_meta and target in task_meta:
             graph.add_edge(source, target)
-            if _to_bool(edge.get("is_critical_edge")):
+            if _to_bool(edge.get("is_critical_edge")) or (
+                task_meta[source]["critical"] and task_meta[target]["critical"]
+            ):
                 critical_edges.add((source, target))
+    if not graph.edges:
+        for target, meta in task_meta.items():
+            for source in _split_predecessor_ids(meta["predecessor_ids"]):
+                if source in task_meta:
+                    graph.add_edge(source, target)
+                    if task_meta[source]["critical"] and task_meta[target]["critical"]:
+                        critical_edges.add((source, target))
     return graph, task_meta, critical_edges
 
 
@@ -713,6 +683,394 @@ def _cpm_layout(graph: nx.DiGraph, task_meta: dict[str, dict[str, Any]]) -> dict
         for index, node in enumerate(nodes):
             pos[node] = (x_index, center - index)
     return pos
+
+
+def _write_cpm_flowchart_image(
+    path: Path,
+    graph: nx.DiGraph,
+    task_meta: dict[str, dict[str, Any]],
+    critical_edges: set[tuple[str, str]],
+    *,
+    title: str,
+) -> None:
+    levels = _cpm_flowchart_levels(graph, task_meta)
+    phase_order = _phase_order(task_meta)
+    phase_index = {phase: index for index, phase in enumerate(phase_order)}
+
+    level_nodes: dict[int, list[str]] = {}
+    for node, level in levels.items():
+        level_nodes.setdefault(level, []).append(node)
+    for nodes in level_nodes.values():
+        nodes.sort(
+            key=lambda node: (
+                phase_index.get(str(task_meta[node].get("phase") or ""), 999),
+                task_meta[node].get("es", 0),
+                task_meta[node].get("ef", 0),
+                _numeric_task_id(node),
+                node,
+            )
+        )
+
+    max_level = max(level_nodes) if level_nodes else 0
+    max_nodes_per_level = max((len(nodes) for nodes in level_nodes.values()), default=1)
+    levels_per_band = 14
+    band_count = math.ceil((max_level + 1) / levels_per_band)
+
+    box_w = 330
+    box_h = 146
+    h_gap = 92
+    v_gap = 42
+    left_margin = 190
+    right_margin = 230
+    top_margin = 230
+    band_header_h = 78
+    band_gap = 135
+    band_inner_h = band_header_h + max_nodes_per_level * (box_h + v_gap) + 35
+    width = left_margin + levels_per_band * box_w + (levels_per_band - 1) * h_gap + right_margin
+    height = top_margin + band_count * band_inner_h + (band_count - 1) * band_gap + 120
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (width, height), "#f7f9fc")
+    draw = ImageDraw.Draw(image)
+    font_regular = _load_pil_font(22)
+    font_small = _load_pil_font(18)
+    font_tiny = _load_pil_font(16)
+    font_marker = _load_pil_font(17, bold=True)
+    font_bold = _load_pil_font(24, bold=True)
+    font_title = _load_pil_font(38, bold=True)
+    font_subtitle = _load_pil_font(20)
+
+    critical_color = CRITICAL_COLOR
+    normal_color = NORMAL_COLOR
+    edge_color = "#A8B3C2"
+    phase_colors = [
+        "#4C78A8",
+        "#F58518",
+        "#54A24B",
+        "#E45756",
+        "#72B7B2",
+        "#B279A2",
+        "#FF9DA6",
+        "#9D755D",
+        "#BAB0AB",
+        "#5F9ED1",
+    ]
+
+    draw.text((left_margin, 54), title, font=font_title, fill="#18212f")
+    draw.text(
+        (left_margin, 108),
+        "从左到右按前置关系推进；红色为关键工序，蓝色为非关键工序；跨段关系用“续接/承接”标记表示。",
+        font=font_subtitle,
+        fill="#526070",
+    )
+    _draw_flowchart_legend(
+        draw,
+        left_margin,
+        150,
+        font_small,
+        font_marker,
+        critical_color=critical_color,
+        normal_color=normal_color,
+        edge_color=edge_color,
+    )
+
+    positions: dict[str, tuple[int, int, int, int]] = {}
+    for band in range(band_count):
+        start_level = band * levels_per_band
+        end_level = min(max_level, start_level + levels_per_band - 1)
+        band_top = top_margin + band * (band_inner_h + band_gap)
+        draw.rounded_rectangle(
+            [60, band_top - 16, width - 70, band_top + band_inner_h - 2],
+            radius=26,
+            fill="#ffffff",
+            outline="#d7dee8",
+            width=2,
+        )
+        draw.text(
+            (left_margin, band_top + 18),
+            f"流程段 {band + 1}: 第 {start_level + 1} - {end_level + 1} 层",
+            font=font_bold,
+            fill="#233044",
+        )
+        for local_col, level in enumerate(range(start_level, end_level + 1)):
+            x = left_margin + local_col * (box_w + h_gap)
+            draw.text((x + 8, band_top + 24), f"L{level + 1:02d}", font=font_tiny, fill="#8a96a8")
+            for index, node in enumerate(level_nodes.get(level, [])):
+                y = band_top + band_header_h + index * (box_h + v_gap)
+                positions[node] = (x, y, x + box_w, y + box_h)
+
+    marker_rows: list[tuple[str, str, str, int, float, str]] = []
+    for source, target in sorted(graph.edges, key=lambda item: (levels.get(item[0], 0), item[0], item[1])):
+        if source not in positions or target not in positions:
+            continue
+        sx0, sy0, sx1, sy1 = positions[source]
+        tx0, ty0, tx1, ty1 = positions[target]
+        source_mid_y = (sy0 + sy1) / 2
+        target_mid_y = (ty0 + ty1) / 2
+        source_band = levels[source] // levels_per_band
+        target_band = levels[target] // levels_per_band
+        is_critical_edge = (source, target) in critical_edges
+        line_color = critical_color if is_critical_edge else edge_color
+        line_width = 5 if is_critical_edge else 3
+        if source_band == target_band and sx1 <= tx0:
+            mid_x = (sx1 + tx0) / 2
+            _draw_arrow(
+                draw,
+                [(sx1, source_mid_y), (mid_x, source_mid_y), (mid_x, target_mid_y), (tx0, target_mid_y)],
+                line_color,
+                line_width,
+            )
+        else:
+            out_x = min(width - 210, sx1 + 70)
+            _draw_arrow(draw, [(sx1, source_mid_y), (out_x, source_mid_y)], line_color, line_width)
+            marker_rows.append(("out", source, target, min(width - 155, out_x + 10), source_mid_y - 17, line_color))
+            in_x = max(130, tx0 - 72)
+            _draw_arrow(draw, [(in_x, target_mid_y), (tx0, target_mid_y)], line_color, line_width)
+            marker_rows.append(("in", source, target, max(68, in_x - 92), target_mid_y - 17, line_color))
+
+    for marker_type, source, target, x, y, color in marker_rows:
+        label = f"续至 {_compact_task_id(target)}" if marker_type == "out" else f"承 {_compact_task_id(source)}"
+        _draw_pill(draw, x, y, x + 86, y + 34, label, font_marker, fill="#ffffff", outline=color)
+
+    for node in sorted(graph.nodes, key=lambda item: (levels.get(item, 0), _numeric_task_id(item), item)):
+        if node not in positions:
+            continue
+        x0, y0, x1, y1 = positions[node]
+        meta = task_meta[node]
+        is_critical = bool(meta.get("critical"))
+        outline = critical_color if is_critical else normal_color
+        fill = "#fff4f2" if is_critical else "#eef5ff"
+        draw.rounded_rectangle(
+            [x0, y0, x1, y1],
+            radius=18,
+            fill=fill,
+            outline=outline,
+            width=4 if is_critical else 3,
+        )
+        phase = str(meta.get("phase") or "未分组")
+        phase_color = phase_colors[phase_index.get(phase, 0) % len(phase_colors)]
+        draw.rounded_rectangle([x0 + 8, y0 + 8, x0 + 22, y1 - 8], radius=7, fill=phase_color, outline=phase_color)
+        draw.text((x0 + 34, y0 + 16), f"{node}  |  {meta.get('duration', 0)}天", font=font_bold, fill="#1f2937")
+        text_y = y0 + 52
+        for line in _wrap_pil_text(draw, str(meta.get("task_name") or ""), font_regular, box_w - 56)[:2]:
+            draw.text((x0 + 34, text_y), line, font=font_regular, fill="#192334")
+            text_y += 28
+        draw.text(
+            (x0 + 34, y1 - 32),
+            f"{phase} / 总时差 {meta.get('total_float', 0)}天",
+            font=font_tiny,
+            fill="#5f6c7b",
+        )
+
+    _draw_phase_legend(
+        draw,
+        phase_order,
+        phase_index,
+        phase_colors,
+        left_margin,
+        height - 70,
+        width,
+        font_small,
+        font_tiny,
+    )
+    image.save(path, quality=95)
+
+
+def _cpm_flowchart_levels(
+    graph: nx.DiGraph,
+    task_meta: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    if not nx.is_directed_acyclic_graph(graph):
+        es_values = sorted({int(task_meta[node].get("es", 0)) for node in graph.nodes})
+        es_index = {es: index for index, es in enumerate(es_values)}
+        return {node: es_index[int(task_meta[node].get("es", 0))] for node in graph.nodes}
+
+    levels: dict[str, int] = {}
+    for node in nx.topological_sort(graph):
+        predecessors = list(graph.predecessors(node))
+        levels[node] = max((levels.get(pred, 0) + 1 for pred in predecessors), default=0)
+    return levels
+
+
+def _phase_order(task_meta: dict[str, dict[str, Any]]) -> list[str]:
+    phases: list[str] = []
+    for node in sorted(
+        task_meta,
+        key=lambda item: (
+            int(task_meta[item].get("es", 0)),
+            int(task_meta[item].get("ef", 0)),
+            _numeric_task_id(item),
+            item,
+        ),
+    ):
+        phase = str(task_meta[node].get("phase") or "未分组")
+        if phase not in phases:
+            phases.append(phase)
+    return phases or ["未分组"]
+
+
+def _draw_flowchart_legend(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    font: ImageFont.ImageFont,
+    marker_font: ImageFont.ImageFont,
+    *,
+    critical_color: str,
+    normal_color: str,
+    edge_color: str,
+) -> None:
+    entries = [
+        ("关键工序 / 关键路径", critical_color),
+        ("非关键工序", normal_color),
+        ("依赖箭线", edge_color),
+        ("跨段续接", "#7a8699"),
+    ]
+    for index, (label, color) in enumerate(entries):
+        item_x = x + index * 250
+        if "箭线" in label:
+            draw.line([(item_x, y + 16), (item_x + 68, y + 16)], fill=color, width=5)
+            draw.polygon([(item_x + 68, y + 16), (item_x + 54, y + 8), (item_x + 54, y + 24)], fill=color)
+        elif "续接" in label:
+            _draw_pill(draw, item_x, y, item_x + 78, y + 32, "续接", marker_font, fill="#f1f4f8", outline=color)
+        else:
+            draw.rounded_rectangle([item_x, y, item_x + 68, y + 32], radius=10, fill=color, outline=color)
+        draw.text((item_x + 90, y + 2), label, font=font, fill="#344154")
+
+
+def _draw_phase_legend(
+    draw: ImageDraw.ImageDraw,
+    phase_order: list[str],
+    phase_index: dict[str, int],
+    phase_colors: list[str],
+    x: int,
+    y: int,
+    image_width: int,
+    font: ImageFont.ImageFont,
+    label_font: ImageFont.ImageFont,
+) -> None:
+    draw.text((x, y - 6), "阶段颜色", font=font, fill="#344154")
+    cursor_x = x + 100
+    cursor_y = y
+    for phase in phase_order:
+        color = phase_colors[phase_index[phase] % len(phase_colors)]
+        draw.rounded_rectangle([cursor_x, cursor_y, cursor_x + 28, cursor_y + 20], radius=6, fill=color, outline=color)
+        draw.text((cursor_x + 36, cursor_y - 2), phase, font=label_font, fill="#465365")
+        cursor_x += 36 + _pil_text_width(draw, phase, label_font) + 34
+        if cursor_x > image_width - 250:
+            cursor_y += 32
+            cursor_x = x + 100
+
+
+def _draw_arrow(
+    draw: ImageDraw.ImageDraw,
+    points: list[tuple[float, float]],
+    color: str,
+    width: int,
+) -> None:
+    if len(points) < 2:
+        return
+    draw.line(points, fill=color, width=width, joint="curve")
+    x1, y1 = points[-2]
+    x2, y2 = points[-1]
+    angle = math.atan2(y2 - y1, x2 - x1)
+    size = 15
+    p1 = (x2 + size * math.cos(angle + math.pi * 0.82), y2 + size * math.sin(angle + math.pi * 0.82))
+    p2 = (x2 + size * math.cos(angle - math.pi * 0.82), y2 + size * math.sin(angle - math.pi * 0.82))
+    draw.polygon([(x2, y2), p1, p2], fill=color)
+
+
+def _draw_pill(
+    draw: ImageDraw.ImageDraw,
+    x0: float,
+    y0: float,
+    x1: float,
+    y1: float,
+    text: str,
+    font: ImageFont.ImageFont,
+    *,
+    fill: str,
+    outline: str,
+) -> None:
+    draw.rounded_rectangle([x0, y0, x1, y1], radius=18, fill=fill, outline=outline, width=2)
+    draw.text((x0 + (x1 - x0 - _pil_text_width(draw, text, font)) / 2, y0 + 7), text, font=font, fill=outline)
+
+
+def _wrap_pil_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> list[str]:
+    lines: list[str] = []
+    current = ""
+    for char in str(text or ""):
+        candidate = current + char
+        if _pil_text_width(draw, candidate, font) <= max_width or not current:
+            current = candidate
+        else:
+            lines.append(current)
+            current = char
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _pil_text_width(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> int:
+    box = draw.textbbox((0, 0), str(text), font=font)
+    return box[2] - box[0]
+
+
+def _load_pil_font(size: int, *, bold: bool = False) -> ImageFont.ImageFont:
+    preferred = (
+        "Microsoft YaHei",
+        "SimHei",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "Arial Unicode MS",
+        "DejaVu Sans",
+    )
+    candidates = list(font_manager.fontManager.ttflist)
+    if bold:
+        bold_candidates = [
+            font
+            for font in candidates
+            if font.name in preferred
+            and (
+                "bold" in str(getattr(font, "style", "")).lower()
+                or str(getattr(font, "weight", "")).lower() in {"bold", "700"}
+            )
+        ]
+        for font in bold_candidates:
+            try:
+                return ImageFont.truetype(font.fname, size)
+            except OSError:
+                continue
+    for family in preferred:
+        for font in candidates:
+            if font.name == family:
+                try:
+                    return ImageFont.truetype(font.fname, size)
+                except OSError:
+                    continue
+    return ImageFont.load_default()
+
+
+def _numeric_task_id(task_id: str) -> int:
+    match = re.search(r"(\d+)$", str(task_id))
+    return int(match.group(1)) if match else 999999
+
+
+def _compact_task_id(task_id: str) -> str:
+    return str(task_id).replace("TASK-", "T")
+
+
+def _split_predecessor_ids(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = re.split(r"[,;，；\s]+", str(value or ""))
+    return [str(item).strip() for item in raw if str(item).strip() and str(item).strip() != "-"]
 
 
 def _resource_matrix(rows: list[dict[str, Any]]):
